@@ -1,12 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { getStripe } from "@/lib/stripe";
+import { PLATFORM_FEE_BPS } from "@/lib/config/fees";
 
-// Platform's cut of every sale, in basis points (1000 = 10%). The rest goes
-// to the seller's connected account via transfer_data below. No pricing
-// decision was specified for Lootza, so this is a placeholder default —
-// change it to whatever the real business terms are.
-const PLATFORM_FEE_BPS = 1000;
+// Requires a "Terms of service" URL to already be set in the Stripe Dashboard
+// (Settings -> Public business information) — Stripe rejects session creation
+// outright if that's missing, which would break every checkout. Off by
+// default for exactly that reason; flip to "true" in the environment only
+// after that Dashboard field is filled in. See .env.example.
+const COLLECT_TOS_CONSENT = process.env.STRIPE_COLLECT_TOS_CONSENT === "true";
 
 /**
  * POST /api/checkout
@@ -126,6 +128,7 @@ export async function POST(request: NextRequest) {
     client_reference_id: buyerId,
     success_url: `${origin}/product/${product.slug}?checkout=success`,
     cancel_url: `${origin}/product/${product.slug}?checkout=cancel`,
+    ...(COLLECT_TOS_CONSENT ? { consent_collection: { terms_of_service: "required" as const } } : {}),
   });
 
   if (!session.url) {
