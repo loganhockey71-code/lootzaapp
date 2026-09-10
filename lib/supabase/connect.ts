@@ -27,13 +27,25 @@ export async function startPayoutOnboarding(): Promise<{ ok: true } | { ok: fals
   const headers = await authHeader();
   if (!headers) return { ok: false, error: "You must be logged in." };
 
+  let res: Response;
   try {
-    const res = await fetch("/api/stripe/connect", { method: "POST", headers });
-    const json = await res.json();
-    if (!res.ok) return { ok: false, error: (json as { error?: string }).error ?? "Failed to start payout setup." };
-    window.location.href = (json as { url: string }).url;
-    return { ok: true };
+    res = await fetch("/api/stripe/connect", { method: "POST", headers });
   } catch {
-    return { ok: false, error: "Network error. Please try again." };
+    return { ok: false, error: "Network error. Please check your connection and try again." };
   }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    // The route always returns JSON, even on failure — a response that
+    // isn't JSON means something outside our own code (a platform-level
+    // timeout/502, for example), so say that rather than the more specific
+    // wording used for the errors that route can return.
+    return { ok: false, error: `Unexpected server response (status ${res.status}). Please try again.` };
+  }
+
+  if (!res.ok) return { ok: false, error: (json as { error?: string }).error ?? "Failed to start payout setup." };
+  window.location.href = (json as { url: string }).url;
+  return { ok: true };
 }
