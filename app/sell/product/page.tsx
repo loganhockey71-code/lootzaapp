@@ -1,14 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Flame, Check, X, ArrowLeft, ArrowRight, Sparkles } from "lucide-react";
+import { Flame, Check, X, ArrowLeft, ArrowRight, Sparkles, Banknote } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Toggle } from "@/components/ui/Toggle";
 import { ProductArtwork } from "@/components/product/ProductArtwork";
 import { CreatorAvatar } from "@/components/creator/CreatorAvatar";
 import { FileUploadZone } from "@/components/sell/FileUploadZone";
 import { ImageUploadZone } from "@/components/sell/ImageUploadZone";
+import { PayoutStatusBanner } from "@/components/sell/PayoutStatusBanner";
 import { categories } from "@/lib/data/categories";
 import { creators } from "@/lib/data/creators";
 import { CATEGORY_ICONS } from "@/lib/icons";
@@ -20,6 +21,7 @@ import {
   validatePreviewImage,
   validateProductFile,
 } from "@/lib/supabase/storage";
+import { fetchPayoutStatus, startPayoutOnboarding, type PayoutStatus } from "@/lib/supabase/connect";
 import { cn, formatFileSize, formatPrice, slugify } from "@/lib/utils";
 import type { CategorySlug, Product } from "@/lib/types";
 
@@ -81,6 +83,45 @@ export default function SellProductPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [coverImageError, setCoverImageError] = useState<string | null>(null);
+
+  // A paid listing can't be sold until Stripe can actually pay the seller —
+  // app/api/checkout already refuses the sale server-side, but a seller
+  // shouldn't be able to publish the listing at all in that state. Free
+  // listings never touch Stripe, so this check is skipped for them.
+  const [payoutStatus, setPayoutStatus] = useState<PayoutStatus | null>(null);
+  const [payoutStatusLoading, setPayoutStatusLoading] = useState(true);
+  const [startingOnboarding, setStartingOnboarding] = useState(false);
+  const [onboardingError, setOnboardingError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetchPayoutStatus()
+      .then((s) => {
+        if (active) setPayoutStatus(s);
+      })
+      .finally(() => {
+        if (active) setPayoutStatusLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const isPaidProduct = Number(form.price) > 0;
+  // Fails closed: still-loading or unknown status blocks publishing a paid
+  // listing just like an explicit "not enabled" would, so there's no window
+  // where a paid listing can be dropped before the real status is known.
+  const blockedOnPayouts = isPaidProduct && (payoutStatusLoading || payoutStatus?.payoutsEnabled !== true);
+
+  async function handleConnectStripe() {
+    setOnboardingError(null);
+    setStartingOnboarding(true);
+    const result = await startPayoutOnboarding();
+    if (!result.ok) {
+      setStartingOnboarding(false);
+      setOnboardingError(result.error);
+    }
+  }
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -167,6 +208,10 @@ export default function SellProductPage() {
     }
     if (!form.file) {
       setSubmitError("Attach a product file before dropping this listing.");
+      return;
+    }
+    if (blockedOnPayouts) {
+      setSubmitError("Set up Stripe payouts before publishing a paid product.");
       return;
     }
 
@@ -503,6 +548,7 @@ export default function SellProductPage() {
 
         {step === 4 && (
           <div className="flex flex-col gap-5">
+            {isPaidProduct && <PayoutStatusBanner />}
             <p className="text-sm font-semibold text-ink-soft">Preview</p>
             <div className="overflow-hidden rounded-2xl ring-1 ring-border">
               <ProductArtwork
@@ -551,6 +597,7 @@ export default function SellProductPage() {
               )}
             </p>
             {submitError && <p className="text-sm font-medium text-red-600">{submitError}</p>}
+            {onboardingError && <p className="text-sm font-medium text-red-600">{onboardingError}</p>}
           </div>
         )}
 
@@ -566,6 +613,11 @@ export default function SellProductPage() {
           {step < STEPS.length - 1 ? (
             <Button className="gap-1.5" onClick={() => setStep((s) => s + 1)} disabled={!stepValid[step]}>
               Continue <ArrowRight size={16} aria-hidden />
+            </Button>
+          ) : blockedOnPayouts ? (
+            <Button onClick={handleConnectStripe} className="gap-1.5" disabled={startingOnboarding || payoutStatusLoading}>
+              <Banknote size={16} aria-hidden />
+              {payoutStatusLoading ? "Checking payout status…" : startingOnboarding ? "Redirecting…" : "Set Up Payouts to Publish"}
             </Button>
           ) : (
             <Button onClick={handleDrop} className="gap-1.5" disabled={submitting}>
