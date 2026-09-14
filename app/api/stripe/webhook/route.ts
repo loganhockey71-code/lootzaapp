@@ -4,52 +4,25 @@ import { getStripe } from "@/lib/stripe";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 // Two separate Stripe webhook endpoints point at this same route: one for
-// the platform's own events, one for events on *connected* (seller) accounts
-// — each configured in Stripe with its own signing secret. Which secret a
-// request verifies against is what tells us which channel it came in on.
+// the platform's own (Checkout/Charge) events, one for events on *connected*
+// (seller) accounts. These are no longer the same verification mechanism —
+// the platform channel is still classic v1 events (full payload, verified
+// via stripe.webhooks.constructEvent); the connect channel is Accounts v2
+// "thin events" (payload only references what changed, verified via
+// stripe.parseEventNotification and requiring a follow-up fetch for the
+// actual data) — see handleRecipientCapabilityChange below.
 const platformWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 const connectWebhookSecret = process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
 
-type WebhookChannel = "platform" | "connect";
-
-const PLATFORM_EVENT_TYPES = new Set<Stripe.Event["type"]>([
-  "checkout.session.completed",
-  "checkout.session.async_payment_succeeded",
-  "charge.refunded",
-]);
-const CONNECT_EVENT_TYPES = new Set<Stripe.Event["type"]>(["account.updated"]);
-
-/**
- * Verifies the request's signature against whichever of the two secrets it
- * actually matches, trying the platform secret first. Each attempt is a full,
- * real HMAC verification via stripe.webhooks.constructEvent — nothing here
- * weakens it; a payload only ever verifies against the one secret it was
- * genuinely signed with; Stripe applies bitwise/constant-time comparison and only
- * one of the two attempts can ever legitimately succeed for a given delivery.
- * Throws if neither secret is configured or neither verifies.
- */
-function verifyStripeEvent(body: string, signature: string): { event: Stripe.Event; channel: WebhookChannel } {
-  const stripe = getStripe();
-  const failures: string[] = [];
-
-  if (platformWebhookSecret) {
-    try {
-      return { event: stripe.webhooks.constructEvent(body, signature, platformWebhookSecret), channel: "platform" };
-    } catch (err) {
-      failures.push(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  if (connectWebhookSecret) {
-    try {
-      return { event: stripe.webhooks.constructEvent(body, signature, connectWebhookSecret), channel: "connect" };
-    } catch (err) {
-      failures.push(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  throw new Error(failures.join("; ") || "No Stripe webhook secret is configured.");
-}
+// Accounts v2 event types for the "recipient" configuration (transfers/
+// payouts) changing — confirmed against the installed SDK's known event
+// list (node_modules/stripe/cjs/StripeEventNotificationHandler.js). Both are
+// handled identically: re-fetch the account's current capability status
+// rather than trust anything in the thin payload itself. Checked with an
+// inline `===` chain on `notification.type` (below) rather than a helper
+// function, so TypeScript's discriminated-union narrowing actually applies
+// to `notification` itself — a narrowing check factored into a separate
+// function only narrows the value passed in, not the original object.
 
 /**
  * The only place a `purchases` row for a real (Stripe-backed) product gets
@@ -123,20 +96,37 @@ async function handleChargeRefunded(charge: Stripe.Charge) {
 }
 
 /**
- * Fires whenever a seller's Connect account changes — most importantly right
- * after they finish (or un-finish, e.g. a failed verification) onboarding.
- * This is the only place stripe_payouts_enabled gets flipped to true, which
- * is what app/api/checkout checks before allowing a real sale of that
- * seller's products.
+ * Fires whenever a seller's Connect account's recipient (transfers/payouts)
+ * configuration changes — most importantly right after they finish (or
+ * un-finish, e.g. a failed verification) onboarding. This is the only place
+ * stripe_payouts_enabled gets flipped to true, which is what
+ * app/api/checkout checks before allowing a real sale of that seller's
+ * products.
+ *
+ * Accounts v2 webhooks are "thin events" — the payload only says *that*
+ * something changed, not what the new state is — so this always re-fetches
+ * the account's current capability status rather than trusting anything in
+ * the event payload itself.
+ *
+ * Checks both `stripe_transfers` (can receive money from the platform) and
+ * `payouts` (can actually get that money out to their bank) — the v1
+ * equivalent checked both `charges_enabled` and `payouts_enabled` for the
+ * same reason: a seller isn't really "paid" until both are true.
  */
-async function handleAccountUpdated(account: Stripe.Account) {
-  const payoutsEnabled = !!account.charges_enabled && !!account.payouts_enabled;
+async function handleRecipientCapabilityChange(accountId: string) {
+  const stripe = getStripe();
+  const account = await stripe.v2.core.accounts.retrieve(accountId, {
+    include: ["configuration.recipient"],
+  });
+  const capabilities = account.configuration?.recipient?.capabilities?.stripe_balance;
+  const payoutsEnabled = capabilities?.stripe_transfers?.status === "active" && capabilities?.payouts?.status === "active";
+
   const { error } = await supabaseAdmin
     .from("profiles")
     .update({ stripe_payouts_enabled: payoutsEnabled })
-    .eq("stripe_account_id", account.id);
+    .eq("stripe_account_id", accountId);
   if (error) {
-    console.error("Stripe webhook: failed to update payouts_enabled for account", account.id, error.message);
+    console.error("Stripe webhook: failed to update payouts_enabled for account", accountId, error.message);
   }
 }
 
@@ -152,45 +142,61 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing stripe-signature header." }, { status: 400 });
   }
 
-  let event: Stripe.Event;
-  let channel: WebhookChannel;
-  try {
-    ({ event, channel } = verifyStripeEvent(body, signature));
-  } catch (err) {
-    console.error("Stripe webhook signature verification failed:", err instanceof Error ? err.message : err);
-    return NextResponse.json({ error: "Invalid signature." }, { status: 400 });
-  }
+  const stripe = getStripe();
 
-  // Belt-and-suspenders: even though only a genuinely Stripe-signed payload
-  // can verify against either secret at all, also confirm the event type
-  // matches the channel it verified on — catches a Stripe endpoint
-  // misconfigured to send the wrong event types down the wrong channel.
-  const expectedChannel: WebhookChannel | null = CONNECT_EVENT_TYPES.has(event.type)
-    ? "connect"
-    : PLATFORM_EVENT_TYPES.has(event.type)
-      ? "platform"
-      : null;
-  if (expectedChannel && expectedChannel !== channel) {
-    console.error(
-      `Stripe webhook: event ${event.type} (${event.id}) verified on the ${channel} channel, expected ${expectedChannel}`
-    );
-    return NextResponse.json({ error: "Event type does not match webhook channel." }, { status: 400 });
-  }
-
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object as Stripe.Checkout.Session;
-    // Card payments are 'paid' immediately. Delayed payment methods complete
-    // 'unpaid' here and fulfill later via checkout.session.async_payment_succeeded.
-    if (session.payment_status === "paid") {
-      await fulfillCheckoutSession(session);
+  // Try the platform channel first: classic v1 events, full payload, a
+  // single real HMAC verification via stripe.webhooks.constructEvent. A
+  // payload only ever verifies against the secret it was genuinely signed
+  // with, so this can't be spoofed by trying the other channel instead.
+  if (platformWebhookSecret) {
+    let event: Stripe.Event | null = null;
+    try {
+      event = stripe.webhooks.constructEvent(body, signature, platformWebhookSecret);
+    } catch (err) {
+      if (!connectWebhookSecret) {
+        console.error("Stripe webhook signature verification failed:", err instanceof Error ? err.message : err);
+        return NextResponse.json({ error: "Invalid signature." }, { status: 400 });
+      }
     }
-  } else if (event.type === "checkout.session.async_payment_succeeded") {
-    await fulfillCheckoutSession(event.data.object as Stripe.Checkout.Session);
-  } else if (event.type === "charge.refunded") {
-    await handleChargeRefunded(event.data.object as Stripe.Charge);
-  } else if (event.type === "account.updated") {
-    await handleAccountUpdated(event.data.object as Stripe.Account);
+    if (event) {
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object as Stripe.Checkout.Session;
+        // Card payments are 'paid' immediately. Delayed payment methods
+        // complete 'unpaid' here and fulfill later via
+        // checkout.session.async_payment_succeeded.
+        if (session.payment_status === "paid") {
+          await fulfillCheckoutSession(session);
+        }
+      } else if (event.type === "checkout.session.async_payment_succeeded") {
+        await fulfillCheckoutSession(event.data.object as Stripe.Checkout.Session);
+      } else if (event.type === "charge.refunded") {
+        await handleChargeRefunded(event.data.object as Stripe.Charge);
+      }
+      return NextResponse.json({ received: true });
+    }
   }
 
-  return NextResponse.json({ received: true });
+  // Fall through to the connect channel: Accounts v2 thin events, verified
+  // and parsed via a different SDK method entirely (not interchangeable
+  // with constructEvent above — a v1-style payload can't parse as a v2 thin
+  // event and vice versa, so there's no ambiguity about which channel a
+  // given delivery actually belongs to).
+  if (connectWebhookSecret) {
+    try {
+      const notification = stripe.parseEventNotification(body, signature, connectWebhookSecret);
+      if (
+        notification.type === "v2.core.account[configuration.recipient].updated" ||
+        notification.type === "v2.core.account[configuration.recipient].capability_status_updated"
+      ) {
+        const accountId = notification.related_object?.id;
+        if (accountId) await handleRecipientCapabilityChange(accountId);
+      }
+      return NextResponse.json({ received: true });
+    } catch (err) {
+      console.error("Stripe webhook signature verification failed:", err instanceof Error ? err.message : err);
+      return NextResponse.json({ error: "Invalid signature." }, { status: 400 });
+    }
+  }
+
+  return NextResponse.json({ error: "Invalid signature." }, { status: 400 });
 }

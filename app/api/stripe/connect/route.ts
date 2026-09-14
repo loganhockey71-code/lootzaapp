@@ -89,17 +89,38 @@ export async function POST(request: NextRequest) {
     let accountId = profile.stripe_account_id;
 
     if (!accountId) {
-      // Country is fixed to US for now — Lootza only prices in USD everywhere
-      // else (see lib/utils.ts formatPrice), so this is a real assumption, not
-      // an oversight. Supporting other countries needs collecting a seller's
-      // actual country and is out of scope here.
-      const account = await stripe.accounts.create({
-        type: "express",
-        country: "US",
-        email: user.email,
-        capabilities: {
-          card_payments: { requested: true },
-          transfers: { requested: true },
+      // Accounts v2 (Stripe now rejects v1 accounts.create for new
+      // integrations — see the "Accounts v1 support" Dashboard setting).
+      // Country is fixed to US for now — Lootza only prices in USD
+      // everywhere else (see lib/utils.ts formatPrice), so this is a real
+      // assumption, not an oversight. Supporting other countries needs
+      // collecting a seller's actual country and is out of scope here.
+      //
+      // identity.entity_type is deliberately omitted — confirmed against a
+      // real test-mode account that v2 account creation succeeds without
+      // it, and Stripe's hosted onboarding link collects it directly from
+      // the seller (it shows up as an "identity.entity_type" entry in the
+      // account's requirements until they do). Setting it ourselves would
+      // mean guessing individual-vs-business on the seller's behalf.
+      //
+      // Only the "recipient" configuration is requested — Lootza uses
+      // destination charges (the platform is the merchant of record via
+      // app/api/checkout's transfer_data), so a seller's connected account
+      // only ever needs to *receive* transfers, never accept its own
+      // charges directly. The v1 code's `card_payments` capability request
+      // had no effect this integration actually depended on.
+      const account = await stripe.v2.core.accounts.create({
+        display_name: user.email ?? undefined,
+        contact_email: user.email,
+        dashboard: "express",
+        defaults: {
+          responsibilities: { fees_collector: "application", losses_collector: "application" },
+        },
+        identity: { country: "US" },
+        configuration: {
+          recipient: {
+            capabilities: { stripe_balance: { stripe_transfers: { requested: true } } },
+          },
         },
       });
       accountId = account.id;
@@ -117,11 +138,16 @@ export async function POST(request: NextRequest) {
     // production host (lootza.vercel.app) in production and localhost in
     // dev — never hardcoded.
     const origin = new URL(request.url).origin;
-    const accountLink = await stripe.accountLinks.create({
+    const accountLink = await stripe.v2.core.accountLinks.create({
       account: accountId,
-      refresh_url: `${origin}/dashboard?connect=refresh`,
-      return_url: `${origin}/dashboard?connect=return`,
-      type: "account_onboarding",
+      use_case: {
+        type: "account_onboarding",
+        account_onboarding: {
+          configurations: ["recipient"],
+          refresh_url: `${origin}/dashboard?connect=refresh`,
+          return_url: `${origin}/dashboard?connect=return`,
+        },
+      },
     });
 
     return NextResponse.json({ url: accountLink.url });
