@@ -41,6 +41,11 @@ const connectWebhookSecret = process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
  * listed here change — price/seller_id from the original purchase are left
  * alone. A retried webhook delivery for the same session just re-applies the
  * same values, which is harmless.
+ *
+ * products.sold is incremented separately, and only once per genuine
+ * completion (first purchase, or a repurchase after a refund) — never on a
+ * retried delivery of a completion already recorded, which the upsert above
+ * would otherwise silently repeat every time Stripe redelivers the event.
  */
 async function fulfillCheckoutSession(session: Stripe.Checkout.Session) {
   const buyerId = session.metadata?.buyer_id;
@@ -51,6 +56,14 @@ async function fulfillCheckoutSession(session: Stripe.Checkout.Session) {
   }
 
   const paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
+
+  const { data: existing } = await supabaseAdmin
+    .from("purchases")
+    .select("status")
+    .eq("buyer_id", buyerId)
+    .eq("product_id", productId)
+    .maybeSingle();
+  const alreadyCompleted = existing?.status === "completed";
 
   const { error } = await supabaseAdmin.from("purchases").upsert(
     {
@@ -63,6 +76,14 @@ async function fulfillCheckoutSession(session: Stripe.Checkout.Session) {
   );
   if (error) {
     console.error("Stripe webhook: failed to record purchase for session", session.id, error.message);
+    return;
+  }
+
+  if (!alreadyCompleted) {
+    const { error: incError } = await supabaseAdmin.rpc("increment_product_sold", { p_product_id: productId });
+    if (incError) {
+      console.error("Stripe webhook: failed to increment sold count for product", productId, incError.message);
+    }
   }
 }
 

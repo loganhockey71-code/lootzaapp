@@ -5,7 +5,6 @@ import Link from "next/link";
 import {
   Plus,
   ArrowRight,
-  ArrowUp,
   DollarSign,
   ShoppingBag,
   Eye,
@@ -27,7 +26,6 @@ import {
   Trophy,
   type LucideIcon,
 } from "lucide-react";
-import { getProductsByCreator } from "@/lib/data/products";
 import { creators } from "@/lib/data/creators";
 import { challenges } from "@/lib/data/challenges";
 import { useAppState } from "@/lib/state/AppStateContext";
@@ -55,30 +53,46 @@ function mockSaves(productId: string, likes: number) {
 }
 
 export default function DashboardPage() {
-  const { myListings, posts, coins, challengeProgress, promotions, togglePromotionPause, leaderboardBadges, user, supabaseProducts } =
+  const { myListings, posts, coins, challengeProgress, promotions, togglePromotionPause, leaderboardBadges, user, profile, supabaseProducts } =
     useAppState();
   const myRealProducts = supabaseProducts.filter((p) => p.sellerId === user?.id);
-  const products = [...getProductsByCreator(CURRENT_USER.id), ...myListings, ...myRealProducts];
+  // Deliberately NOT including the demo "pixelmax" seed catalog here — every
+  // real logged-in seller used to see that unrelated demo creator's fake
+  // sales mixed into their own revenue/sales totals below, regardless of
+  // whether they'd ever listed anything themselves. myListings is the old
+  // local-only simulated-purchase system (still fine to mock stats for,
+  // since it was never real to begin with); myRealProducts is Stripe-backed
+  // and real.
+  const products = [...myListings, ...myRealProducts];
+  const displayName = profile?.displayName || user?.username || CURRENT_USER.name;
   const myVideoPosts = posts.filter((p) => p.creatorId === CURRENT_USER.id && p.type === "video");
   const [promoteOpen, setPromoteOpen] = useState(false);
 
   const rows = products
     .map((p) => {
-      const views = mockViews(p.id, p.sold);
-      const clicks = mockClicks(p.id, views);
-      const saves = mockSaves(p.id, p.likes);
+      // Real (Stripe-backed) listings don't have view/click/save tracking
+      // built yet — showing fabricated numbers next to their real revenue
+      // would be actively misleading, not just imprecise. Only the
+      // local-only simulated catalog (myListings) gets the mock treatment.
+      const isReal = !!p.sellerId;
+      const views = isReal ? null : mockViews(p.id, p.sold);
+      const clicks = isReal || views === null ? null : mockClicks(p.id, views);
+      const saves = isReal ? null : mockSaves(p.id, p.likes);
       const revenue = p.price * p.sold;
-      const conversion = views > 0 ? (p.sold / views) * 100 : 0;
+      const conversion = views ? (p.sold / views) * 100 : null;
       return { product: p, views, clicks, saves, revenue, conversion };
     })
     .sort((a, b) => b.revenue - a.revenue);
 
   const totalRevenue = rows.reduce((sum, r) => sum + r.revenue, 0);
   const totalSales = rows.reduce((sum, r) => sum + r.product.sold, 0);
-  const totalViews = rows.reduce((sum, r) => sum + r.views, 0);
-  const totalClicks = rows.reduce((sum, r) => sum + r.clicks, 0);
-  const totalSaves = rows.reduce((sum, r) => sum + r.saves, 0);
-  const conversionRate = totalViews > 0 ? (totalSales / totalViews) * 100 : 0;
+  const totalViews = rows.reduce((sum, r) => sum + (r.views ?? 0), 0);
+  const totalClicks = rows.reduce((sum, r) => sum + (r.clicks ?? 0), 0);
+  const totalSaves = rows.reduce((sum, r) => sum + (r.saves ?? 0), 0);
+  // Only counts toward the real-tracking rows — mixing in demo-tracked views
+  // would make this rate meaningless once a seller has both kinds of listing.
+  const trackedViews = rows.reduce((sum, r) => (r.views != null ? sum + r.views : sum), 0);
+  const conversionRate = trackedViews > 0 ? (totalSales / trackedViews) * 100 : 0;
   const completedChallenges = Object.values(challengeProgress).filter((c) => c.completedAt).length;
   const unclaimedChallenges = Object.entries(challengeProgress).filter(
     ([, p]) => p.completedAt && !p.claimed
@@ -91,23 +105,25 @@ export default function DashboardPage() {
   });
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-  const stats: { label: string; value: string; icon: LucideIcon; delta: string }[] = [
-    { label: "Total Revenue", value: formatPrice(totalRevenue), icon: DollarSign, delta: "+18.6%" },
-    { label: "Sales", value: formatCompactNumber(totalSales), icon: ShoppingBag, delta: "+12.4%" },
-    { label: "Product Views", value: formatCompactNumber(totalViews), icon: Eye, delta: "+24.1%" },
-    { label: "Clicks", value: formatCompactNumber(totalClicks), icon: MousePointerClick, delta: "+9.7%" },
-    { label: "Saves", value: formatCompactNumber(totalSaves), icon: Bookmark, delta: "+11.2%" },
-    { label: "Conversion Rate", value: `${conversionRate.toFixed(2)}%`, icon: LineChart, delta: "+8.2%" },
-    { label: "Followers", value: formatCompactNumber(CURRENT_USER.followers), icon: Users, delta: "+15.3%" },
+  // Trend deltas (e.g. "+18.6%") were previously hardcoded on every tile
+  // regardless of any actual change over time — removed rather than
+  // replaced, since there's no real day-over-day baseline to compute a
+  // genuine one from yet.
+  const stats: { label: string; value: string; icon: LucideIcon }[] = [
+    { label: "Total Revenue", value: formatPrice(totalRevenue), icon: DollarSign },
+    { label: "Sales", value: formatCompactNumber(totalSales), icon: ShoppingBag },
+    { label: "Product Views", value: formatCompactNumber(totalViews), icon: Eye },
+    { label: "Clicks", value: formatCompactNumber(totalClicks), icon: MousePointerClick },
+    { label: "Saves", value: formatCompactNumber(totalSaves), icon: Bookmark },
+    { label: "Conversion Rate", value: `${conversionRate.toFixed(2)}%`, icon: LineChart },
+    { label: "Followers", value: formatCompactNumber(CURRENT_USER.followers), icon: Users },
   ];
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="font-display text-2xl font-extrabold text-ink sm:text-3xl">
-            Welcome back, {CURRENT_USER.name}!
-          </h1>
+          <h1 className="font-display text-2xl font-extrabold text-ink sm:text-3xl">Welcome back, {displayName}!</h1>
           <p className="text-sm text-ink-soft">Here&apos;s what&apos;s happening with your store today.</p>
         </div>
         <Link href="/sell">
@@ -122,14 +138,9 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {stats.map((s) => (
           <div key={s.label} className="rounded-2xl border border-border bg-surface p-4 shadow-card">
-            <div className="flex items-center justify-between">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-2 text-ink-soft">
-                <s.icon size={16} aria-hidden />
-              </span>
-              <span className="flex items-center gap-0.5 text-xs font-semibold text-emerald-600">
-                <ArrowUp size={12} aria-hidden /> {s.delta}
-              </span>
-            </div>
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-2 text-ink-soft">
+              <s.icon size={16} aria-hidden />
+            </span>
             <p className="mt-2 font-display text-xl font-extrabold text-ink">{s.value}</p>
             <p className="text-xs text-ink-soft">{s.label}</p>
           </div>
@@ -221,12 +232,12 @@ export default function DashboardPage() {
                         {product.title}
                       </Link>
                     </td>
-                    <td className="py-3 text-ink-soft">{formatCompactNumber(views)}</td>
-                    <td className="py-3 text-ink-soft">{formatCompactNumber(clicks)}</td>
-                    <td className="py-3 text-ink-soft">{formatCompactNumber(saves)}</td>
+                    <td className="py-3 text-ink-soft">{views != null ? formatCompactNumber(views) : "—"}</td>
+                    <td className="py-3 text-ink-soft">{clicks != null ? formatCompactNumber(clicks) : "—"}</td>
+                    <td className="py-3 text-ink-soft">{saves != null ? formatCompactNumber(saves) : "—"}</td>
                     <td className="py-3 text-ink-soft">{formatCompactNumber(product.sold)}</td>
                     <td className="py-3 font-semibold text-ink">{formatPrice(revenue)}</td>
-                    <td className="py-3 text-ink-soft">{conversion.toFixed(2)}%</td>
+                    <td className="py-3 text-ink-soft">{conversion != null ? `${conversion.toFixed(2)}%` : "—"}</td>
                     <td className="py-3">
                       {product.reviewCount > 0 ? <StarRating rating={product.rating} /> : "—"}
                     </td>
