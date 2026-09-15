@@ -35,6 +35,8 @@ export interface ProductRow {
   release_at: string | null;
   status: "draft" | "active" | "archived";
   product_file_path: string | null;
+  /** Real completed-purchase count — see 20260916_increment_product_sold.sql. */
+  sold: number;
   created_at: string;
   updated_at: string;
 }
@@ -64,11 +66,12 @@ export function mapProductRow(row: ProductRow): Product {
     sellerId: row.seller_id,
     price: Number(row.price),
     originalPrice: row.original_price != null ? Number(row.original_price) : undefined,
-    // Engagement stats are owned by systems this migration doesn't touch (reviews/likes/sales) —
-    // real listings start at zero exactly like locally-created ones already do.
+    // Ratings/reviews/likes are still simulated client-side (unchanged) —
+    // only `sold` is a real, database-backed count, incremented by
+    // app/api/stripe/webhook after an actual completed payment.
     rating: 0,
     reviewCount: 0,
-    sold: 0,
+    sold: row.sold,
     likes: 0,
     coverImage: row.thumbnail_url,
     videoUrl: null,
