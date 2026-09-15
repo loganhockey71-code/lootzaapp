@@ -63,6 +63,7 @@ export function ProductVideoCard({ product }: { product: Product }) {
 
         <div className="absolute left-3 top-3 flex flex-wrap items-center gap-1.5">
           <RarityBadge rarity={rarity} />
+          {!product.sellerId && <Badge tone="neutral">Demo</Badge>}
           {product.badge && <Badge tone={product.badge} />}
           {product.drop && (
             <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2.5 py-1 text-xs font-bold text-white">

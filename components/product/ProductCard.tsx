@@ -37,6 +37,7 @@ export function ProductCard({ product, priority }: { product: Product; priority?
 
         <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-3">
           <div className="flex flex-wrap gap-1.5">
+            {!product.sellerId && <Badge tone="neutral">Demo</Badge>}
             {product.badge && <Badge tone={product.badge} />}
             {product.drop && (
               <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2.5 py-1 text-xs font-bold text-white">

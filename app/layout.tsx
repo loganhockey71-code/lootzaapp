@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { AppStateProvider } from "@/lib/state/AppStateContext";
 import { AuthGate } from "@/components/auth/AuthGate";
+import { CookieConsent } from "@/components/layout/CookieConsent";
 
 export const metadata: Metadata = {
   title: "Lootza — Create. Drop. Collect.",
@@ -16,6 +17,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <AppStateProvider>
           <AuthGate>{children}</AuthGate>
         </AppStateProvider>
+        <CookieConsent />
       </body>
     </html>
   );

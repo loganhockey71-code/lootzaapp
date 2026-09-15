@@ -103,6 +103,20 @@ export async function fetchActiveProducts(): Promise<Product[]> {
   return (data as ProductRow[]).map(mapProductRow);
 }
 
+/**
+ * Looks up a single real listing by slug — used by generateMetadata (a Server
+ * Component context) for a product that isn't in the static seed catalog, so
+ * real sellers' listings get real SEO metadata instead of the generic
+ * fallback. Returns null on any miss/error rather than throwing, since a
+ * failed metadata lookup should degrade to the fallback title, not break the
+ * page.
+ */
+export async function fetchProductBySlug(slug: string): Promise<Product | null> {
+  const { data, error } = await supabase.from("products").select("*").eq("slug", slug).eq("status", "active").maybeSingle();
+  if (error || !data) return null;
+  return mapProductRow(data as ProductRow);
+}
+
 export interface NewProductInput {
   id: string;
   sellerId: string;

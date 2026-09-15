@@ -177,6 +177,17 @@ export function DiscoverContent() {
     return list;
   }, [feed, category, query, feedTab, followed, signals, isPromoted]);
 
+  // The feed is a snap-scrolling stream, not a paginated list — it should never
+  // visibly dead-end just because the catalog is small. Repeating the filtered
+  // list is simpler and safer than a real infinite-scroll/load-more mechanism,
+  // and is invisible to the user since cards only differ by which lap they're
+  // on. Capped so a large catalog doesn't get tiled into an enormous DOM.
+  const loopedFeed = useMemo(() => {
+    if (filtered.length === 0) return [] as { item: FeedItem; lap: number }[];
+    const laps = filtered.length >= 40 ? 2 : Math.min(8, Math.ceil(120 / filtered.length));
+    return Array.from({ length: laps }, (_, lap) => filtered.map((item) => ({ item, lap }))).flat();
+  }, [filtered]);
+
   const showFollowingEmpty = feedTab === "following" && followed.length === 0;
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -209,7 +220,10 @@ export function DiscoverContent() {
             <div ref={scrollRef} className="snap-y-mandatory no-scrollbar h-full w-full overflow-y-auto lg:flex lg:flex-col lg:gap-6">
               {/* Filters only ever appear here, before the first post — they scroll away
                   with it and never reappear above later posts. */}
-              <div className="flex flex-col gap-2 bg-ink p-3 pb-4 sm:p-4" style={{ scrollSnapAlign: "start" }}>
+              <div
+                className="flex flex-col gap-2 rounded-b-2xl border-b border-white/5 bg-gradient-to-b from-ink to-[#252230] p-3 pb-4 shadow-[0_8px_20px_-8px_rgba(0,0,0,0.4)] sm:p-4"
+                style={{ scrollSnapAlign: "start" }}
+              >
                 <div className="no-scrollbar flex gap-2 overflow-x-auto">
                   {FEED_TABS.map((tab) => (
                     <FilterPill key={tab.id} tab={tab} active={feedTab === tab.id} onClick={() => setFeedTab(tab.id)} />
@@ -222,11 +236,11 @@ export function DiscoverContent() {
                 </div>
               </div>
 
-              {filtered.map((item) =>
+              {loopedFeed.map(({ item, lap }) =>
                 item.kind === "product" ? (
-                  <ProductVideoCard key={item.id} product={item.product} />
+                  <ProductVideoCard key={`${item.id}-${lap}`} product={item.product} />
                 ) : (
-                  <PostCard key={item.id} post={item.post} />
+                  <PostCard key={`${item.id}-${lap}`} post={item.post} />
                 )
               )}
             </div>

@@ -1,14 +1,14 @@
 import Link from "next/link";
-import { ArrowRight, Sparkles, TrendingUp, Star, Users, type LucideIcon } from "lucide-react";
+import { ArrowRight, Sparkles, TrendingUp, Compass, ShoppingBag, Trophy, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { ProductCard } from "@/components/product/ProductCard";
 import { products } from "@/lib/data/products";
 
 const trending = products.filter((p) => p.badge === "trending").slice(0, 5);
-const stats: { label: string; value: string; icon: LucideIcon }[] = [
-  { label: "Drops today", value: "2,458", icon: TrendingUp },
-  { label: "Buyer rating", value: "98.6%", icon: Star },
-  { label: "Happy users", value: "125K+", icon: Users },
+const howItWorks: { step: string; title: string; body: string; icon: LucideIcon }[] = [
+  { step: "1", title: "Discover", body: "Browse or scroll the feed to find game assets, UI kits, and more.", icon: Compass },
+  { step: "2", title: "Buy & download", body: "Pay securely and get instant access to your files.", icon: ShoppingBag },
+  { step: "3", title: "Collect & sell", body: "Build your collection, then drop your own products when you're ready.", icon: Trophy },
 ];
 
 export default function HomePage() {
@@ -39,12 +39,16 @@ export default function HomePage() {
             </Link>
           </div>
 
-          <div className="mt-14 grid w-full max-w-2xl grid-cols-3 gap-4 rounded-2xl border border-border bg-surface/80 p-5 shadow-card backdrop-blur">
-            {stats.map((s) => (
-              <div key={s.label} className="flex flex-col items-center gap-1">
-                <s.icon size={20} className="text-ink-soft" aria-hidden />
-                <span className="font-display text-lg font-extrabold text-ink sm:text-xl">{s.value}</span>
-                <span className="text-xs text-ink-soft">{s.label}</span>
+          <div className="mt-14 grid w-full max-w-3xl grid-cols-1 gap-4 rounded-2xl border border-border bg-surface/80 p-5 shadow-card backdrop-blur sm:grid-cols-3 sm:p-6">
+            {howItWorks.map((s) => (
+              <div key={s.step} className="flex flex-col items-center gap-1.5 text-center sm:items-start sm:text-left">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-50 text-primary-700">
+                  <s.icon size={18} aria-hidden />
+                </span>
+                <span className="font-display text-sm font-extrabold text-ink">
+                  {s.step}. {s.title}
+                </span>
+                <span className="text-xs text-ink-soft">{s.body}</span>
               </div>
             ))}
           </div>
