@@ -20,6 +20,11 @@ const AUTH_ROUTES = ["/login", "/signup"];
 // AuthGate first, so those two must stay reachable without a session).
 const PUBLIC_ROUTES = ["/terms", "/privacy", "/refund-policy", "/contact", "/forgot-password", "/reset-password"];
 
+// Blog posts are a content-marketing surface meant for search engines and
+// signed-out visitors specifically — /blog/<slug> is a prefix match (unlike
+// the exact-match PUBLIC_ROUTES above) since every post lives under it.
+const PUBLIC_ROUTE_PREFIXES = ["/blog"];
+
 /**
  * Gates the whole marketplace behind a real Supabase-authenticated session. Auth
  * pages and public/legal pages render standalone (no marketplace chrome);
@@ -31,7 +36,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const isAuthRoute = AUTH_ROUTES.includes(pathname);
-  const isPublicRoute = isAuthRoute || PUBLIC_ROUTES.includes(pathname);
+  const isPublicRoute =
+    isAuthRoute ||
+    PUBLIC_ROUTES.includes(pathname) ||
+    PUBLIC_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 
   useEffect(() => {
     if (!hydrated) return;

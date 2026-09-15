@@ -5,6 +5,9 @@ import { AuthGate } from "@/components/auth/AuthGate";
 import { CookieConsent } from "@/components/layout/CookieConsent";
 
 export const metadata: Metadata = {
+  // Resolves relative URLs in per-page metadata (openGraph.images, etc.) into
+  // absolute ones — without this, Next warns and social previews can break.
+  metadataBase: new URL("https://lootza.vercel.app"),
   title: "Lootza — Create. Drop. Collect.",
   description:
     "The gamified marketplace to discover, buy, collect, and sell digital products — game assets, UI kits, creator tools, and more.",
