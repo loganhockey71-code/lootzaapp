@@ -37,10 +37,10 @@ function FilterPill({ tab, active, onClick }: { tab: TabItem; active: boolean; o
       type="button"
       onClick={onClick}
       className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold backdrop-blur transition-all active:scale-95 sm:text-sm",
+        "flex shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all active:scale-95 sm:text-sm",
         active
-          ? "border-white bg-white text-ink shadow-sm"
-          : "border-white/30 bg-black/25 text-white hover:border-white/60"
+          ? "border-primary-600 bg-primary-600 text-white shadow-sm"
+          : "border-border bg-surface text-ink-soft hover:border-primary-300 hover:text-ink"
       )}
     >
       {tab.icon && <tab.icon size={13} aria-hidden />}
@@ -221,7 +221,7 @@ export function DiscoverContent() {
               {/* Filters only ever appear here, before the first post — they scroll away
                   with it and never reappear above later posts. */}
               <div
-                className="flex flex-col gap-2 rounded-b-2xl border-b border-white/5 bg-gradient-to-b from-ink to-[#252230] p-3 pb-4 shadow-[0_8px_20px_-8px_rgba(0,0,0,0.4)] sm:p-4"
+                className="flex flex-col gap-2 rounded-b-2xl border-b border-border bg-surface p-3 pb-4 shadow-card sm:p-4"
                 style={{ scrollSnapAlign: "start" }}
               >
                 <div className="no-scrollbar flex gap-2 overflow-x-auto">
