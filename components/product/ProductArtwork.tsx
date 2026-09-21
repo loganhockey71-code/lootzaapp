@@ -15,6 +15,18 @@ const CATEGORY_PALETTE: Record<CategorySlug, [string, string, string]> = {
   web: ["#3b82f6", "#7c3aed", "#0b1226"],
   creator: ["#ec4899", "#a855f7", "#2a1046"],
   ai: ["#14b8a6", "#7c3aed", "#0b1226"],
+  ebooks: ["#0ea5e9", "#6366f1", "#0c1a33"],
+  courses: ["#f59e0b", "#ef4444", "#2a1508"],
+  music: ["#8b5cf6", "#06b6d4", "#150f2e"],
+  video: ["#ef4444", "#f59e0b", "#2a0d0d"],
+  photography: ["#10b981", "#0ea5e9", "#0a2018"],
+  software: ["#2563eb", "#14b8a6", "#0a1226"],
+  templates: ["#f97316", "#eab308", "#2a1808"],
+  printables: ["#ec4899", "#f97316", "#2a1030"],
+  fonts: ["#64748b", "#a855f7", "#111827"],
+  art: ["#d946ef", "#6366f1", "#1f0f2e"],
+  business: ["#0d9488", "#2563eb", "#08201d"],
+  other: ["#71717a", "#a855f7", "#18181b"],
 };
 
 export function ProductArtwork({

@@ -96,3 +96,16 @@ export function postedAtToMinutes(postedAt: string): number {
   const multiplier = { m: 1, h: 60, d: 60 * 24, w: 60 * 24 * 7 }[unit] ?? 1;
   return value * multiplier;
 }
+
+/** "Just now" / "5m ago" / "3d ago" — the same shape postedAtToMinutes() parses. */
+export function toRelativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return `${Math.floor(days / 7)}w ago`;
+}

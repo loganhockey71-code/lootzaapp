@@ -63,7 +63,7 @@ export default function SignUpPage() {
                 <input
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="e.g. pixelmax"
+                  placeholder="e.g. yourname"
                   className="input"
                   autoComplete="username"
                 />

@@ -6,17 +6,12 @@ import { Camera, Circle, Square, Upload, RefreshCw, Check, Video as VideoIcon } 
 import { Button } from "@/components/ui/Button";
 import { ProductPicker } from "@/components/sell/ProductPicker";
 import { CollaboratorPicker } from "@/components/sell/CollaboratorPicker";
-import { creators } from "@/lib/data/creators";
-import { getProductsByCreator } from "@/lib/data/products";
 import { useAppState } from "@/lib/state/AppStateContext";
 import { useCamera } from "@/lib/hooks/useCamera";
-import type { FeedPost } from "@/lib/types";
-
-const CURRENT_USER = creators.find((c) => c.id === "pixelmax")!;
+import { uploadPostMedia, removePostMedia, validatePostMedia } from "@/lib/supabase/storage";
 
 export default function SellVideoPage() {
-  const { addPost, myListings } = useAppState();
-  const myProducts = [...getProductsByCreator(CURRENT_USER.id), ...myListings];
+  const { user, myProducts, createSupabasePost } = useAppState();
 
   const { videoRef, active, error, start, stop } = useCamera({ video: true, audio: true });
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -24,8 +19,14 @@ export default function SellVideoPage() {
 
   const [recording, setRecording] = useState(false);
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  // The actual file that gets uploaded; mediaUrl is only its local preview.
+  const [mediaFile, setMediaFile] = useState<Blob | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [caption, setCaption] = useState("");
-  const [productId, setProductId] = useState<string | null>(myProducts[0]?.id ?? null);
+  const [chosenProductId, setProductId] = useState<string | null>(null);
+  // Defaults to the first of THIS user's own products until they pick one.
+  const productId = chosenProductId ?? myProducts[0]?.id ?? null;
   const [collaboratorId, setCollaboratorId] = useState<string | null>(null);
   const [posted, setPosted] = useState(false);
 
@@ -39,6 +40,7 @@ export default function SellVideoPage() {
     };
     recorder.onstop = () => {
       const blob = new Blob(chunksRef.current, { type: "video/webm" });
+      setMediaFile(blob);
       setMediaUrl(URL.createObjectURL(blob));
       stop();
     };
@@ -55,30 +57,54 @@ export default function SellVideoPage() {
   function handleFileUpload(files: FileList | null) {
     const file = files?.[0];
     if (!file) return;
+    setSubmitError(null);
+    setMediaFile(file);
     setMediaUrl(URL.createObjectURL(file));
   }
 
   function retake() {
     if (mediaUrl) URL.revokeObjectURL(mediaUrl);
     setMediaUrl(null);
+    setMediaFile(null);
   }
 
-  function handlePost() {
-    if (!mediaUrl || !productId) return;
-    const post: FeedPost = {
-      id: `video-${Date.now().toString(36)}`,
+  async function handlePost() {
+    if (!user || !mediaFile || !productId) return;
+    const invalid = validatePostMedia(mediaFile, "video");
+    if (invalid) {
+      setSubmitError(invalid);
+      return;
+    }
+    setSubmitError(null);
+    setSubmitting(true);
+
+    // Upload first (into this user's own storage folder), then create the row that
+    // points at it; the row is owned by the signed-in user via author_id.
+    const id = crypto.randomUUID();
+    let uploaded: { path: string; publicUrl: string };
+    try {
+      uploaded = await uploadPostMedia(user.id, id, mediaFile);
+    } catch (err) {
+      setSubmitting(false);
+      setSubmitError(err instanceof Error ? err.message : "Couldn't upload your video. Please try again.");
+      return;
+    }
+
+    const result = await createSupabasePost({
+      id,
       type: "video",
-      creatorId: CURRENT_USER.id,
-      mediaUrl,
-      coverSeed: `video-${Date.now()}`,
+      mediaUrl: uploaded.publicUrl,
       category: myProducts.find((p) => p.id === productId)?.category ?? null,
       caption: caption.trim(),
       linkedProductId: productId,
-      likes: 0,
-      postedAt: "Just now",
       collaboratorId,
-    };
-    addPost(post);
+    });
+    setSubmitting(false);
+    if (!result.ok) {
+      await removePostMedia(uploaded.path);
+      setSubmitError(result.error);
+      return;
+    }
     setPosted(true);
   }
 
@@ -180,16 +206,18 @@ export default function SellVideoPage() {
 
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-semibold text-ink">Collaborator (optional)</span>
-              <CollaboratorPicker value={collaboratorId} onChange={setCollaboratorId} excludeId={CURRENT_USER.id} />
+              <CollaboratorPicker value={collaboratorId} onChange={setCollaboratorId} excludeId={user?.id ?? ""} />
             </div>
+
+            {submitError && <p className="text-sm font-medium text-red-600">{submitError}</p>}
 
             <Button
               size="lg"
               className="w-full gap-1.5"
               onClick={handlePost}
-              disabled={!productId}
+              disabled={!productId || submitting}
             >
-              <Check size={18} aria-hidden /> Post Video
+              <Check size={18} aria-hidden /> {submitting ? "Posting…" : "Post Video"}
             </Button>
           </div>
         )}

@@ -5,11 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Search, ChevronDown, Clock, TrendingUp, Compass, Gift } from "lucide-react";
 import { categories } from "@/lib/data/categories";
-import { creators } from "@/lib/data/creators";
-import { feedPosts } from "@/lib/data/feedPosts";
 import { useAppState } from "@/lib/state/AppStateContext";
 import { useAllProducts } from "@/lib/hooks/useAllProducts";
-import { searchProducts, searchCreators, searchHashtags, TRENDING_SEARCHES } from "@/lib/search";
+import { searchProducts, searchHashtags, TRENDING_SEARCHES } from "@/lib/search";
+import { searchProfiles } from "@/lib/supabase/profiles";
+import { profileToCreator } from "@/lib/creators";
+import type { Creator } from "@/lib/types";
 import { ProductArtwork } from "@/components/product/ProductArtwork";
 import { CreatorAvatar } from "@/components/creator/CreatorAvatar";
 import { cn, formatPrice } from "@/lib/utils";
@@ -24,7 +25,7 @@ export function SearchBar({
   onNavigate?: () => void;
 }) {
   const router = useRouter();
-  const { recentSearches, addRecentSearch, posts: userPosts } = useAppState();
+  const { recentSearches, addRecentSearch, supabasePosts } = useAppState();
   const allProducts = useAllProducts();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
@@ -39,10 +40,29 @@ export function SearchBar({
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
-  const allPosts = useMemo(() => [...userPosts, ...feedPosts], [userPosts]);
   const matchProducts = useMemo(() => searchProducts(allProducts, query), [allProducts, query]);
-  const matchCreators = useMemo(() => searchCreators(creators, query), [query]);
-  const matchTags = useMemo(() => searchHashtags(allPosts, query), [allPosts, query]);
+  const matchTags = useMemo(() => searchHashtags(supabasePosts, query), [supabasePosts, query]);
+
+  // Creators are real accounts, so they're looked up in Supabase (debounced) rather than
+  // filtered from a local list.
+  const [creatorResults, setCreatorResults] = useState<{ query: string; creators: Creator[] } | null>(null);
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      searchProfiles(q, 3)
+        .then((list) => {
+          if (active) setCreatorResults({ query: q, creators: list.map(profileToCreator) });
+        })
+        .catch((err: Error) => console.error("Creator search failed:", err.message));
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [query]);
+  const matchCreators = creatorResults && creatorResults.query === query.trim() ? creatorResults.creators : [];
   const hasQuery = query.trim().length > 0;
   const categoryName = categories.find((c) => c.slug === category)?.name;
 
@@ -204,19 +224,21 @@ export function SearchBar({
                   ))}
                 </SuggestionSection>
               )}
-              <SuggestionSection title="Trending searches">
-                {TRENDING_SEARCHES.map((q) => (
-                  <button
-                    key={q}
-                    type="button"
-                    onClick={() => pickSuggestion(q)}
-                    className="flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-surface-2"
-                  >
-                    <TrendingUp size={14} className="text-accent-600" aria-hidden />
-                    <span className="truncate text-sm text-ink">{q}</span>
-                  </button>
-                ))}
-              </SuggestionSection>
+              {TRENDING_SEARCHES.length > 0 && (
+                <SuggestionSection title="Trending searches">
+                  {TRENDING_SEARCHES.map((q) => (
+                    <button
+                      key={q}
+                      type="button"
+                      onClick={() => pickSuggestion(q)}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-surface-2"
+                    >
+                      <TrendingUp size={14} className="text-accent-600" aria-hidden />
+                      <span className="truncate text-sm text-ink">{q}</span>
+                    </button>
+                  ))}
+                </SuggestionSection>
+              )}
             </>
           )}
         </div>

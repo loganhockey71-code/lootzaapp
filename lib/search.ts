@@ -11,15 +11,12 @@ export function extractHashtags(text: string): string[] {
   return [...seen];
 }
 
-/** Curated stand-in for a real "what's trending" signal — a backend would compute this from search volume. */
-export const TRENDING_SEARCHES: string[] = [
-  "cyberpunk ui kit",
-  "notion template",
-  "ai prompts",
-  "stream overlay",
-  "icon pack",
-  "portfolio template",
-];
+/**
+ * Intentionally empty: there is no search-volume data yet, and suggesting made-up
+ * queries would point people at content that doesn't exist. Populate this from real
+ * search analytics when it exists; the UI hides the section while it is empty.
+ */
+export const TRENDING_SEARCHES: string[] = [];
 
 export function searchProducts(products: Product[], query: string, limit = 4): Product[] {
   const q = query.trim().toLowerCase();

@@ -1,29 +1,26 @@
-import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import { getCreatorByHandle, creators } from "@/lib/data/creators";
-import { getProductsByCreator } from "@/lib/data/products";
-import { CreatorProfileClient } from "./CreatorProfileClient";
+import { fetchProfileByUsername } from "@/lib/supabase/profiles";
+import { CreatorProfileLoader } from "./CreatorProfileLoader";
 
 // Only bare handles are real routes — /@handle requests are rewritten to
 // /handle by proxy.ts before the router ever sees the "@" (see proxy.ts).
-export function generateStaticParams() {
-  return creators.map((c) => ({ handle: c.handle }));
-}
+// Profiles are real, user-created rows, so there is nothing to pre-render.
 
 export async function generateMetadata(props: PageProps<"/[handle]">): Promise<Metadata> {
   const { handle } = await props.params;
-  const creator = getCreatorByHandle(handle);
-  return { title: creator ? `${creator.name} (@${creator.handle}) — Lootza` : "Creator — Lootza" };
+  try {
+    const profile = await fetchProfileByUsername(decodeURIComponent(handle));
+    if (profile) {
+      const name = profile.displayName?.trim() || profile.username;
+      return { title: `${name} (@${profile.username}) — Lootza` };
+    }
+  } catch {
+    // A failed lookup should degrade to the generic title, not break the page.
+  }
+  return { title: "Creator — Lootza" };
 }
 
 export default async function CreatorProfilePage(props: PageProps<"/[handle]">) {
   const { handle } = await props.params;
-  const creator = getCreatorByHandle(handle);
-  if (!creator) notFound();
-
-  const products = getProductsByCreator(creator.id);
-
-  return (
-    <CreatorProfileClient creator={creator} products={products} isCurrentUser={creator.id === "pixelmax"} />
-  );
+  return <CreatorProfileLoader handle={decodeURIComponent(handle)} />;
 }

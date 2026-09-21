@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -15,6 +16,7 @@ import type {
   ChallengeProgress,
   CommentEntry,
   CosmeticType,
+  Creator,
   FeedPost,
   Product,
   Profile,
@@ -24,18 +26,28 @@ import type {
 } from "@/lib/types";
 import { supabase } from "@/lib/supabase";
 import { fetchActiveProducts, insertProduct, type NewProductInput } from "@/lib/supabase/products";
+import { fetchPosts, insertPost, type NewPostInput } from "@/lib/supabase/posts";
 import { fetchMyPurchases, type PurchaseRecord } from "@/lib/supabase/purchases";
-import { getCreatorById } from "@/lib/data/creators";
-import { products as seedProducts } from "@/lib/data/products";
-import { feedPosts as seedFeedPosts } from "@/lib/data/feedPosts";
+import {
+  PROFILE_COLUMNS,
+  fetchProfilesByIds,
+  mapProfileRow,
+  type ProfileRow,
+} from "@/lib/supabase/profiles";
+import {
+  pruneOldAvatars,
+  removeAvatarFile,
+  uploadAvatar,
+  validateAvatar,
+} from "@/lib/supabase/storage";
+import { profileToCreator } from "@/lib/creators";
 import { challenges } from "@/lib/data/challenges";
 import { getCosmetic } from "@/lib/data/cosmetics";
 import { getCoinPackage } from "@/lib/data/coinPackages";
 import { adSpendToUsd, estimateAdReach, MIN_AD_SPEND_USD } from "@/lib/ads";
-import { hashSeed, formatPrice } from "@/lib/utils";
+import { hashSeed } from "@/lib/utils";
 import { grantCoins, grantXp, pushNotification, bumpChallengeProgress, type RewardsShape } from "./rewards";
 
-const CURRENT_USER_ID = "pixelmax";
 /** Max free coins simulateReferral can ever grant — an unlimited "invite" button would be a coin-farming exploit. */
 export const MAX_SIMULATED_REFERRALS = 10;
 
@@ -49,8 +61,6 @@ interface PersistedShape extends RewardsShape {
   saved: string[];
   followed: string[];
   collection: CollectionEntry[];
-  myListings: Product[];
-  posts: FeedPost[];
   notifiedProductIds: string[];
   referralCount: number;
   recentSearches: string[];
@@ -67,6 +77,11 @@ interface AppState extends PersistedShape {
   user: AuthUser | null;
   profile: Profile | null;
   updateProfile: (updates: ProfileUpdate) => Promise<AuthResult>;
+  /** Uploads a new profile picture to Supabase Storage and saves its URL on the signed-in user's profile. */
+  uploadProfileAvatar: (file: File) => Promise<AuthResult>;
+  removeProfileAvatar: () => Promise<AuthResult>;
+  /** Resolves any user id (a product's seller, a post's author) to their real public profile, once loaded. */
+  getCreator: (id: string) => Creator | undefined;
   toggleLike: (productId: string) => void;
   toggleSave: (productId: string) => void;
   toggleFollow: (creatorId: string) => void;
@@ -75,9 +90,10 @@ interface AppState extends PersistedShape {
   isFollowed: (creatorId: string) => boolean;
   isOwned: (productId: string) => boolean;
   purchase: (productId: string) => void;
-  addListing: (product: Product) => void;
-  // Real (Supabase-backed) products — kept separate from the seed catalog and myListings.
+  // Real (Supabase-backed) products - the only catalog there is.
   supabaseProducts: Product[];
+  /** Only the signed-in user's own listings (seller_id === their auth id). */
+  myProducts: Product[];
   productsLoading: boolean;
   productsError: string | null;
   createSupabaseProduct: (input: NewProductInput) => Promise<{ ok: true; product: Product } | { ok: false; error: string }>;
@@ -87,7 +103,12 @@ interface AppState extends PersistedShape {
   purchases: PurchaseRecord[];
   purchasesLoading: boolean;
   refetchPurchases: () => Promise<PurchaseRecord[]>;
-  addPost: (post: FeedPost) => void;
+  // Real (Supabase-backed) posts/videos, owned by their author's auth id.
+  supabasePosts: FeedPost[];
+  /** Only the signed-in user's own posts (author_id === their auth id). */
+  myPosts: FeedPost[];
+  postsLoading: boolean;
+  createSupabasePost: (input: NewPostInput) => Promise<{ ok: true; post: FeedPost } | { ok: false; error: string }>;
   signUp: (username: string, email: string, password: string) => Promise<AuthResult>;
   logIn: (email: string, password: string) => Promise<AuthResult>;
   logOut: () => Promise<void>;
@@ -123,8 +144,13 @@ interface AppState extends PersistedShape {
   hydrated: boolean;
 }
 
-const STORAGE_KEY = "lootza:app-state:v1";
-const CURRENT_USERNAME = "You";
+// Progress that only lives in this browser (coins, likes, streaks...) is stored
+// PER ACCOUNT. One shared key would leak the previous user's data into the next
+// account that logs in on the same browser. The older, un-namespaced
+// "lootza:app-state:v1" blob is intentionally never read: there's no way to know
+// which account it belonged to.
+const STORAGE_PREFIX = "lootza:app-state:v2:";
+const storageKeyFor = (userId: string) => `${STORAGE_PREFIX}${userId}`;
 
 const AppStateContext = createContext<AppState | null>(null);
 
@@ -134,47 +160,16 @@ function toAuthUser(user: SupabaseUser): AuthUser {
   return { id: user.id, username, email: user.email ?? "" };
 }
 
-/** Maps a `public.profiles` row (snake_case, as Postgres returns it) to our camelCase Profile type. */
-function toProfile(row: {
-  id: string;
-  username: string;
-  display_name: string | null;
-  avatar_url: string | null;
-  bio: string | null;
-  level: number;
-  xp: number;
-  coins: number;
-  is_seller: boolean;
-  created_at: string;
-  updated_at: string;
-}): Profile {
-  return {
-    id: row.id,
-    username: row.username,
-    displayName: row.display_name,
-    avatarUrl: row.avatar_url,
-    bio: row.bio,
-    level: row.level,
-    xp: row.xp,
-    coins: row.coins,
-    isSeller: row.is_seller,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
 function loadInitial(): PersistedShape {
   return {
     liked: [],
     saved: [],
     followed: [],
     collection: [],
-    myListings: [],
-    posts: [],
     coins: 0,
     coinTxns: [],
-    level: 4,
-    xp: 4230,
+    level: 1,
+    xp: 0,
     xpTxns: [],
     notifications: [],
     challengeProgress: {},
@@ -197,62 +192,92 @@ function loadInitial(): PersistedShape {
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<PersistedShape>(loadInitial);
-  const [localHydrated, setLocalHydrated] = useState(false);
 
-  // The signed-in user comes entirely from Supabase's own session, not the
-  // localStorage blob above — Supabase already persists/refreshes it itself.
+  // The signed-in user comes entirely from Supabase's own session — Supabase
+  // already persists/refreshes it itself.
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const hydrated = localHydrated && authChecked;
+  const userId = user?.id ?? null;
 
+  // Whose local progress `state` currently holds: `undefined` until the first
+  // load, then the user id (or null when logged out). It differs from `userId`
+  // for exactly one render after a login/logout/account switch — during that
+  // window `hydrated` is false, so nothing renders or persists another
+  // account's data under this account.
+  const [stateOwnerId, setStateOwnerId] = useState<string | null | undefined>(undefined);
+  const hydrated = authChecked && stateOwnerId === userId;
+
+  // A brand-new signup that gets an immediate session earns a welcome bonus. It has to
+  // be applied AFTER that account's (empty) local state is loaded below — granting it
+  // in signUp() itself would just be overwritten by the load.
+  const pendingWelcomeRef = useRef<string | null>(null);
+
+  // (Re)loads this browser's saved progress whenever the signed-in account changes.
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        // Campaigns saved before daily-budget/duration existed only have a flat `budget` —
-        // treat that as a single day so old localStorage data keeps rendering.
-        if (Array.isArray(parsed.promotions)) {
-          parsed.promotions = parsed.promotions.map((p: Partial<Promotion> & { budget: number }) => ({
-            durationDays: 1,
-            dailyBudget: p.budget,
-            ...p,
-          }));
+    if (!authChecked) return;
+    let next = loadInitial();
+    if (userId) {
+      try {
+        const raw = window.localStorage.getItem(storageKeyFor(userId));
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          // Campaigns saved before daily-budget/duration existed only have a flat `budget` —
+          // treat that as a single day so old localStorage data keeps rendering.
+          if (Array.isArray(parsed.promotions)) {
+            parsed.promotions = parsed.promotions.map((p: Partial<Promotion> & { budget: number }) => ({
+              durationDays: 1,
+              dailyBudget: p.budget,
+              ...p,
+            }));
+          }
+          next = { ...next, ...parsed };
         }
-        // One-time hydration from a browser-only API: localStorage isn't available during SSR,
-        // so state can't be initialized lazily without a server/client mismatch.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setState((prev) => ({ ...prev, ...parsed }));
+      } catch {
+        // ignore malformed local storage
       }
-    } catch {
-      // ignore malformed local storage
-    } finally {
-      setLocalHydrated(true);
+      if (pendingWelcomeRef.current === userId) {
+        pendingWelcomeRef.current = null;
+        next = grantCoins(next, 250, "special-event", "Welcome bonus — free coins for joining Lootza");
+      }
     }
-  }, []);
+    // One-time hydration from a browser-only API (localStorage isn't available during SSR),
+    // keyed on the account so switching users swaps ALL of this state atomically.
+    setState(next);
+    setStateOwnerId(userId);
+  }, [authChecked, userId]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !userId) return;
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      window.localStorage.setItem(storageKeyFor(userId), JSON.stringify(state));
     } catch {
       // storage may be unavailable (private mode, quota) — safe to ignore in a prototype
     }
-  }, [state, hydrated]);
+  }, [state, hydrated, userId]);
 
   // Reads the existing Supabase session on load, then stays in sync with it —
   // sign-in, sign-out, and token refresh all flow through this one listener.
   useEffect(() => {
     let active = true;
+    // Keeps the same object when nothing about the account changed (token refreshes),
+    // so they don't ripple re-renders through the whole app.
+    const applySession = (session: { user: SupabaseUser } | null) => {
+      const nextUser = session?.user ? toAuthUser(session.user) : null;
+      setUser((prev) =>
+        prev && nextUser && prev.id === nextUser.id && prev.username === nextUser.username && prev.email === nextUser.email
+          ? prev
+          : nextUser
+      );
+    };
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!active) return;
-      setUser(session?.user ? toAuthUser(session.user) : null);
+      applySession(session);
       setAuthChecked(true);
     });
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ? toAuthUser(session.user) : null);
+      applySession(session);
     });
     return () => {
       active = false;
@@ -260,25 +285,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Loads the real `profiles` row for whoever is signed in, and clears it on logout.
+  // Loads the real `profiles` row for whoever is signed in, and clears it on logout or
+  // account switch — keyed on the user id so a token refresh doesn't refetch/flicker.
   const [profile, setProfile] = useState<Profile | null>(null);
   useEffect(() => {
-    if (!user) {
-      // Clearing derived state when its source (the signed-in user) disappears —
-      // not a render-loop risk since `user` itself only changes via the auth listener.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setProfile(null);
-      return;
-    }
+    // Whatever was loaded belonged to the previous account (or nobody).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setProfile(null);
+    if (!userId) return;
     let active = true;
     supabase
       .from("profiles")
-      // Explicit columns, not "*": profiles also carries stripe_account_id /
-      // stripe_payouts_enabled (Stripe Connect state), which the client has
-      // no reason to see — the "viewable by everyone" RLS policy is row-level
-      // only, so it can't restrict those columns itself.
-      .select("id, username, display_name, avatar_url, bio, level, xp, coins, is_seller, created_at, updated_at")
-      .eq("id", user.id)
+      // Explicit columns, not "*": profiles also carries Stripe Connect state the
+      // client has no reason to see (the database hides it from clients too).
+      .select(PROFILE_COLUMNS)
+      .eq("id", userId)
       .single()
       .then(({ data, error }) => {
         if (!active) return;
@@ -287,19 +308,44 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           setProfile(null);
           return;
         }
-        setProfile(toProfile(data));
+        setProfile(mapProfileRow(data as ProfileRow));
       });
     return () => {
       active = false;
     };
-  }, [user]);
+  }, [userId]);
 
-  // Real, Supabase-backed listings — public read, so this loads for everyone
-  // (not gated on `user`) and is kept entirely separate from the seed catalog.
+  // First-200-users bonus ($10 = 1,000 coins). The cap and the once-per-user rule
+  // are enforced by claim_welcome_bonus() in Postgres; this only mirrors a
+  // successful grant into the wallet balance, which is what the UI displays.
+  const profileId = profile?.id ?? null;
+  useEffect(() => {
+    if (!profileId) return;
+    let active = true;
+    supabase.rpc("claim_welcome_bonus").then(({ data, error }) => {
+      if (!active) return;
+      if (error) {
+        console.error("Failed to claim welcome bonus:", error.message);
+        return;
+      }
+      const granted = typeof data === "number" ? data : 0;
+      if (granted <= 0) return;
+      setState((prev) =>
+        grantCoins(prev, granted, "special-event", "Early-adopter bonus — $10 in coins for the first 200 users")
+      );
+    });
+    return () => {
+      active = false;
+    };
+  }, [profileId]);
+
+  // Real, Supabase-backed listings — public read, so this loads for everyone. Refetched
+  // when the account changes so a seller's own listings are always current.
   const [supabaseProducts, setSupabaseProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsError, setProductsError] = useState<string | null>(null);
   useEffect(() => {
+    if (!authChecked) return;
     let active = true;
     fetchActiveProducts()
       .then((list) => {
@@ -318,13 +364,83 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [authChecked, userId]);
+
+  // Real, Supabase-backed posts/videos — same public-read rules as products.
+  const [supabasePosts, setSupabasePosts] = useState<FeedPost[]>([]);
+  const [postsLoading, setPostsLoading] = useState(true);
+  useEffect(() => {
+    if (!authChecked) return;
+    let active = true;
+    fetchPosts()
+      .then((list) => {
+        if (active) setSupabasePosts(list);
+      })
+      .catch((err: Error) => {
+        console.error("Failed to load posts:", err.message);
+      })
+      .finally(() => {
+        if (active) setPostsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [authChecked, userId]);
+
+  const myProducts = useMemo(
+    () => (userId ? supabaseProducts.filter((p) => p.sellerId === userId) : []),
+    [supabaseProducts, userId]
+  );
+  const myPosts = useMemo(
+    () => (userId ? supabasePosts.filter((p) => p.creatorId === userId) : []),
+    [supabasePosts, userId]
+  );
+
+  // Public profiles of every seller/author/collaborator that appears in the
+  // loaded content, fetched once each. This is what replaces the old hardcoded
+  // creator list: a card's creator is whatever `profiles` row owns the content.
+  const [creatorsById, setCreatorsById] = useState<Record<string, Creator>>({});
+  const requestedCreatorIds = useRef(new Set<string>());
+  useEffect(() => {
+    const wanted = new Set<string>();
+    for (const p of supabaseProducts) wanted.add(p.creatorId);
+    for (const p of supabasePosts) {
+      wanted.add(p.creatorId);
+      if (p.collaboratorId) wanted.add(p.collaboratorId);
+    }
+    const missing = [...wanted].filter((id) => !requestedCreatorIds.current.has(id));
+    if (missing.length === 0) return;
+    missing.forEach((id) => requestedCreatorIds.current.add(id));
+    fetchProfilesByIds(missing)
+      .then((list) => {
+        if (list.length === 0) return;
+        setCreatorsById((prev) => {
+          const next = { ...prev };
+          for (const pr of list) next[pr.id] = profileToCreator(pr);
+          return next;
+        });
+      })
+      .catch((err: Error) => {
+        console.error("Failed to load creator profiles:", err.message);
+        // Let a later render retry these.
+        missing.forEach((id) => requestedCreatorIds.current.delete(id));
+      });
+  }, [supabaseProducts, supabasePosts]);
+
+  const getCreator = useCallback(
+    (id: string): Creator | undefined => (profile && profile.id === id ? profileToCreator(profile) : creatorsById[id]),
+    [profile, creatorsById]
+  );
 
   const createSupabaseProduct = useCallback(
     async (input: NewProductInput): Promise<{ ok: true; product: Product } | { ok: false; error: string }> => {
       try {
         const product = await insertProduct(input);
-        setSupabaseProducts((prev) => [product, ...prev]);
+        setSupabaseProducts((prev) => [product, ...prev.filter((p) => p.id !== product.id)]);
+        setState((prev) => {
+          const next = grantXp(prev, 120, "product-upload", `Uploaded "${product.title}"`);
+          return bumpChallengeProgress(next, "upload-product", 1);
+        });
         return { ok: true, product };
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : "Failed to create listing." };
@@ -333,22 +449,40 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  // Real, Supabase-backed purchases — the signed-in buyer's own, so this is
-  // gated on `user` and refetched on every login (this is what makes owning a
-  // real product survive refresh/logout/a different browser or device).
+  const createSupabasePost = useCallback(
+    async (input: NewPostInput): Promise<{ ok: true; post: FeedPost } | { ok: false; error: string }> => {
+      try {
+        const post = await insertPost(input);
+        setSupabasePosts((prev) => [post, ...prev.filter((p) => p.id !== post.id)]);
+        setState((prev) => {
+          let next = grantXp(prev, post.type === "video" ? 90 : 50, "post", post.type === "video" ? "Posted a video" : "Shared a post");
+          if (post.type === "video") next = bumpChallengeProgress(next, "post-video", 1);
+          return next;
+        });
+        return { ok: true, post };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : "Failed to publish post." };
+      }
+    },
+    []
+  );
+
+  // Real, Supabase-backed purchases — the signed-in buyer's own, gated on the
+  // account and refetched whenever it changes (this is what makes owning a real
+  // product survive refresh/logout/a different browser or device).
   const [purchases, setPurchases] = useState<PurchaseRecord[]>([]);
   const [purchasesLoading, setPurchasesLoading] = useState(true);
   useEffect(() => {
-    if (!user) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setPurchases([]);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+    // Never keep the previous account's purchases around while the next ones load.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPurchases([]);
+    if (!userId) {
       setPurchasesLoading(false);
       return;
     }
     let active = true;
     setPurchasesLoading(true);
-    fetchMyPurchases(user.id)
+    fetchMyPurchases(userId)
       .then((list) => {
         if (active) setPurchases(list);
       })
@@ -361,14 +495,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [user]);
+  }, [userId]);
 
   const refetchPurchases = useCallback(async (): Promise<PurchaseRecord[]> => {
-    if (!user) return [];
-    const list = await fetchMyPurchases(user.id);
+    if (!userId) return [];
+    const list = await fetchMyPurchases(userId);
     setPurchases(list);
     return list;
-  }, [user]);
+  }, [userId]);
 
   // Daily streak + "being active" XP — adjusted during render (not an effect)
   // so it settles in the same pass instead of causing an extra render.
@@ -386,19 +520,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         next = grantXp(next, 20, "daily-active", "Daily visit");
         if ([3, 7, 14, 30].includes(streak)) {
           next = grantCoins(next, streak * 20, "streak", `${streak}-day streak bonus`);
-        }
-        // Mock incoming activity on the seller's own catalog — notification only, no reward,
-        // so it can't be used to farm coins/XP; capped at once per real day like the streak check.
-        const myProducts = [...seedProducts.filter((p) => p.creatorId === CURRENT_USER_ID), ...next.myListings];
-        if (myProducts.length > 0 && hashSeed(`sale-${today}`) % 5 < 2) {
-          const sold = myProducts[hashSeed(`sale-pick-${today}`) % myProducts.length];
-          next = pushNotification(
-            next,
-            "sale",
-            "You made a sale!",
-            `"${sold.title}" just sold for ${formatPrice(sold.price)}.`,
-            `/product/${sold.slug}`
-          );
         }
         return next;
       });
@@ -429,109 +550,46 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const toggleFollow = useCallback((creatorId: string) => {
-    setState((prev) => {
-      const nowFollowing = !prev.followed.includes(creatorId);
-      let next: PersistedShape = {
-        ...prev,
-        followed: nowFollowing ? [...prev.followed, creatorId] : prev.followed.filter((id) => id !== creatorId),
-      };
-
-      if (nowFollowing) {
-        const creator = getCreatorById(creatorId);
-        const freshDrop = seedProducts.find(
-          (p) => p.creatorId === creatorId && !next.notifiedProductIds.includes(p.id) && (p.badge === "new" || p.drop)
-        );
-        if (creator && freshDrop) {
-          next = {
-            ...next,
-            notifiedProductIds: [...next.notifiedProductIds, freshDrop.id],
-          };
-          next = pushNotification(
-            next,
-            freshDrop.drop ? "limited-drop" : "new-drop",
-            `${creator.name} dropped something new`,
-            freshDrop.title,
-            `/product/${freshDrop.slug}`
-          );
-        }
-        // Mock reciprocal engagement — some creators notice and follow back. Deterministic
-        // so the same creator always behaves the same way, not a real-time random event.
-        if (creator && hashSeed(`follow-back-${creatorId}`) % 5 === 0) {
-          next = pushNotification(
-            next,
-            "follow",
-            `${creator.name} followed you back`,
-            "Check out their latest drops.",
-            `/@${creator.handle}`
-          );
-        }
-      }
-
-      return next;
-    });
+    setState((prev) => ({
+      ...prev,
+      followed: prev.followed.includes(creatorId)
+        ? prev.followed.filter((id) => id !== creatorId)
+        : [...prev.followed, creatorId],
+    }));
   }, []);
 
-  const purchase = useCallback((productId: string) => {
-    setState((prev) => {
-      if (prev.collection.some((entry) => entry.productId === productId)) return prev;
-      const product = [...seedProducts, ...prev.myListings].find((p) => p.id === productId);
-      const isFirstEver = prev.collection.length === 0;
-      let next: PersistedShape = {
-        ...prev,
-        collection: [...prev.collection, { productId, purchasedAt: new Date().toISOString() }],
-      };
-      next = grantXp(next, 60, "sale", "Completed a purchase");
-      next = grantCoins(
-        next,
-        isFirstEver ? 150 : 25,
-        isFirstEver ? "first-purchase" : "purchase",
-        isFirstEver ? "First purchase bonus" : "Purchase reward"
-      );
-      next = bumpChallengeProgress(next, "make-sale", 1);
-      if (product) {
-        next = pushNotification(
+  const purchase = useCallback(
+    (productId: string) => {
+      setState((prev) => {
+        if (prev.collection.some((entry) => entry.productId === productId)) return prev;
+        const product = supabaseProducts.find((p) => p.id === productId);
+        const isFirstEver = prev.collection.length === 0;
+        let next: PersistedShape = {
+          ...prev,
+          collection: [...prev.collection, { productId, purchasedAt: new Date().toISOString() }],
+        };
+        next = grantXp(next, 60, "sale", "Completed a purchase");
+        next = grantCoins(
           next,
-          "purchase",
-          "Purchase confirmed",
-          `"${product.title}" was added to your collection.`,
-          `/product/${product.slug}`
+          isFirstEver ? 150 : 25,
+          isFirstEver ? "first-purchase" : "purchase",
+          isFirstEver ? "First purchase bonus" : "Purchase reward"
         );
-      }
-      return next;
-    });
-  }, []);
-
-  const addListing = useCallback((product: Product) => {
-    setState((prev) => {
-      let next: PersistedShape = { ...prev, myListings: [product, ...prev.myListings] };
-      next = grantXp(next, 120, "product-upload", `Uploaded "${product.title}"`);
-      next = bumpChallengeProgress(next, "upload-product", 1);
-      return next;
-    });
-  }, []);
-
-  const addPost = useCallback((post: FeedPost) => {
-    setState((prev) => {
-      let next: PersistedShape = { ...prev, posts: [post, ...prev.posts] };
-      next = grantXp(next, post.type === "video" ? 90 : 50, "post", post.type === "video" ? "Posted a video" : "Shared a post");
-      if (post.type === "video") {
-        next = bumpChallengeProgress(next, "post-video", 1);
-      }
-      if (post.collaboratorId) {
-        const collaborator = getCreatorById(post.collaboratorId);
-        if (collaborator) {
+        next = bumpChallengeProgress(next, "make-sale", 1);
+        if (product) {
           next = pushNotification(
             next,
-            "collaboration",
-            "Collaboration tagged",
-            `You tagged ${collaborator.name} as a collaborator on your ${post.type === "video" ? "video" : "post"}.`,
-            `/@${collaborator.handle}`
+            "purchase",
+            "Purchase confirmed",
+            `"${product.title}" was added to your collection.`,
+            `/product/${product.slug}`
           );
         }
-      }
-      return next;
-    });
-  }, []);
+        return next;
+      });
+    },
+    [supabaseProducts]
+  );
 
   const signUp = useCallback(async (username: string, email: string, password: string): Promise<AuthResult> => {
     const { data, error } = await supabase.auth.signUp({
@@ -544,8 +602,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
     if (data.session) {
       // Immediate session (email confirmation is off) — same as the old instant-login demo flow.
+      pendingWelcomeRef.current = data.user.id;
       setUser(toAuthUser(data.user));
-      setState((prev) => grantCoins(prev, 250, "special-event", "Welcome bonus — free coins for joining Lootza"));
       return { ok: true };
     }
     // Email confirmation is required — no session yet, so there's nothing to log the user into.
@@ -568,7 +626,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // silently ignored server-side even if someone sneaks them into `updates`.
   const updateProfile = useCallback(
     async (updates: ProfileUpdate): Promise<AuthResult> => {
-      if (!user) return { ok: false, error: "You must be logged in." };
+      if (!userId) return { ok: false, error: "You must be logged in." };
 
       const payload: Record<string, string | null> = {};
       if (updates.username !== undefined) payload.username = updates.username.trim();
@@ -579,8 +637,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       const { data, error } = await supabase
         .from("profiles")
         .update(payload)
-        .eq("id", user.id)
-        .select("id, username, display_name, avatar_url, bio, level, xp, coins, is_seller, created_at, updated_at")
+        .eq("id", userId)
+        .select(PROFILE_COLUMNS)
         .single();
 
       if (error) {
@@ -588,11 +646,57 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (error.code === "23505") return { ok: false, error: "That username is already taken." };
         return { ok: false, error: error.message };
       }
-      setProfile(toProfile(data));
+      setProfile(mapProfileRow(data as ProfileRow));
       return { ok: true };
     },
-    [user]
+    [userId]
   );
+
+  // Storage first, then the profiles row: if saving the URL fails, the just-uploaded
+  // file is removed again so failed attempts don't leave orphaned images behind.
+  const uploadProfileAvatar = useCallback(
+    async (file: File): Promise<AuthResult> => {
+      if (!userId) return { ok: false, error: "You must be logged in." };
+      const invalid = validateAvatar(file);
+      if (invalid) return { ok: false, error: invalid };
+
+      let uploaded: { path: string; publicUrl: string };
+      try {
+        uploaded = await uploadAvatar(userId, file);
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : "Couldn't upload that image." };
+      }
+
+      const { data, error } = await supabase
+        .from("profiles")
+        .update({ avatar_url: uploaded.publicUrl })
+        .eq("id", userId)
+        .select(PROFILE_COLUMNS)
+        .single();
+      if (error) {
+        await removeAvatarFile(uploaded.path);
+        return { ok: false, error: error.message };
+      }
+      setProfile(mapProfileRow(data as ProfileRow));
+      void pruneOldAvatars(userId, uploaded.path);
+      return { ok: true };
+    },
+    [userId]
+  );
+
+  const removeProfileAvatar = useCallback(async (): Promise<AuthResult> => {
+    if (!userId) return { ok: false, error: "You must be logged in." };
+    const { data, error } = await supabase
+      .from("profiles")
+      .update({ avatar_url: null })
+      .eq("id", userId)
+      .select(PROFILE_COLUMNS)
+      .single();
+    if (error) return { ok: false, error: error.message };
+    setProfile(mapProfileRow(data as ProfileRow));
+    void pruneOldAvatars(userId, "");
+    return { ok: true };
+  }, [userId]);
 
   const purchaseCosmetic = useCallback((id: string): AuthResult => {
     let result: AuthResult = { ok: true };
@@ -812,70 +916,52 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return result;
   }, []);
 
-  const addComment = useCallback((targetId: string, body: string, parentId: string | null = null) => {
-    if (!body.trim()) return;
-    setState((prev) => {
-      const comment: CommentEntry = {
-        id: `comment-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-        targetId,
-        authorName: CURRENT_USERNAME,
-        body: body.trim(),
-        createdAt: new Date().toISOString(),
-        parentId,
-      };
-      let next: PersistedShape = { ...prev, comments: [comment, ...prev.comments] };
+  // Comments/reviews are still stored per-account in this browser only (not yet
+  // in Supabase); what they now carry is the signed-in user's real name.
+  const authorName = profile?.displayName?.trim() || profile?.username || user?.username || "Member";
 
-      // Mock the creator noticing a top-level comment on their own product/post and
-      // replying — deterministic per-comment so it isn't a repeatable reward loop.
-      if (!parentId && hashSeed(comment.id) % 3 === 0) {
-        const product = [...seedProducts, ...prev.myListings].find((p) => p.id === targetId);
-        const post = [...seedFeedPosts, ...prev.posts].find((p) => p.id === targetId);
-        const ownerId = product?.creatorId ?? post?.creatorId;
-        if (ownerId && ownerId !== CURRENT_USER_ID) {
-          const owner = getCreatorById(ownerId);
-          const replies = [
-            "Thanks so much for checking it out!",
-            "Really appreciate the comment!",
-            "Glad you like it — more coming soon.",
-            "Thanks for the support!",
-          ];
-          if (owner) {
-            next = pushNotification(
-              next,
-              "reply",
-              `${owner.name} replied`,
-              replies[hashSeed(`reply-${comment.id}`) % replies.length],
-              product ? `/product/${product.slug}` : "/discover"
-            );
-          }
-        }
-      }
+  const addComment = useCallback(
+    (targetId: string, body: string, parentId: string | null = null) => {
+      if (!body.trim()) return;
+      setState((prev) => {
+        const comment: CommentEntry = {
+          id: `comment-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          targetId,
+          authorName,
+          body: body.trim(),
+          createdAt: new Date().toISOString(),
+          parentId,
+        };
+        return { ...prev, comments: [comment, ...prev.comments] };
+      });
+    },
+    [authorName]
+  );
 
-      return next;
-    });
-  }, []);
-
-  const addReview = useCallback((productId: string, rating: number, body: string) => {
-    if (!body.trim()) return;
-    setState((prev) => {
-      const owned = prev.collection.some((entry) => entry.productId === productId);
-      const review: Review = {
-        id: `review-${Date.now().toString(36)}`,
-        author: CURRENT_USERNAME,
-        rating,
-        date: "Just now",
-        verified: owned,
-        body: body.trim(),
-      };
-      let next: PersistedShape = {
-        ...prev,
-        userReviews: { ...prev.userReviews, [productId]: [review, ...(prev.userReviews[productId] ?? [])] },
-      };
-      next = grantXp(next, 40, "review", "Left a review");
-      next = bumpChallengeProgress(next, "leave-review", 1);
-      return next;
-    });
-  }, []);
+  const addReview = useCallback(
+    (productId: string, rating: number, body: string) => {
+      if (!body.trim()) return;
+      setState((prev) => {
+        const owned = prev.collection.some((entry) => entry.productId === productId);
+        const review: Review = {
+          id: `review-${Date.now().toString(36)}`,
+          author: authorName,
+          rating,
+          date: "Just now",
+          verified: owned,
+          body: body.trim(),
+        };
+        let next: PersistedShape = {
+          ...prev,
+          userReviews: { ...prev.userReviews, [productId]: [review, ...(prev.userReviews[productId] ?? [])] },
+        };
+        next = grantXp(next, 40, "review", "Left a review");
+        next = bumpChallengeProgress(next, "leave-review", 1);
+        return next;
+      });
+    },
+    [authorName]
+  );
 
   const recordWatch = useCallback((id: string) => {
     setState((prev) => {
@@ -897,20 +983,26 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       user,
       profile,
       updateProfile,
+      uploadProfileAvatar,
+      removeProfileAvatar,
+      getCreator,
       hydrated,
       toggleLike,
       toggleSave,
       toggleFollow,
       purchase,
-      addListing,
       supabaseProducts,
+      myProducts,
       productsLoading,
       productsError,
       createSupabaseProduct,
       purchases,
       purchasesLoading,
       refetchPurchases,
-      addPost,
+      supabasePosts,
+      myPosts,
+      postsLoading,
+      createSupabasePost,
       signUp,
       logIn,
       logOut,
@@ -947,20 +1039,26 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       user,
       profile,
       updateProfile,
+      uploadProfileAvatar,
+      removeProfileAvatar,
+      getCreator,
       hydrated,
       toggleLike,
       toggleSave,
       toggleFollow,
       purchase,
-      addListing,
       supabaseProducts,
+      myProducts,
       productsLoading,
       productsError,
       createSupabaseProduct,
       purchases,
       purchasesLoading,
       refetchPurchases,
-      addPost,
+      supabasePosts,
+      myPosts,
+      postsLoading,
+      createSupabasePost,
       signUp,
       logIn,
       logOut,

@@ -7,9 +7,9 @@ import type { Product } from "@/lib/types";
 import { ProductArtwork } from "./ProductArtwork";
 import { RarityBadge } from "@/components/ui/RarityBadge";
 import { Button } from "@/components/ui/Button";
-import { getCreatorById } from "@/lib/data/creators";
 import { calculateRarity } from "@/lib/rarity";
 import { useAllProducts } from "@/lib/hooks/useAllProducts";
+import { useAppState } from "@/lib/state/AppStateContext";
 import { requestDownloadUrl } from "@/lib/supabase/download";
 
 const RARITY_RING: Record<string, string> = {
@@ -21,7 +21,8 @@ const RARITY_RING: Record<string, string> = {
 };
 
 export function CollectibleCard({ product, purchasedAt }: { product: Product; purchasedAt: string }) {
-  const creator = getCreatorById(product.creatorId);
+  const { getCreator } = useAppState();
+  const creator = getCreator(product.creatorId);
   const allProducts = useAllProducts();
   const rarity = calculateRarity(product, allProducts);
   const [downloaded, setDownloaded] = useState(false);

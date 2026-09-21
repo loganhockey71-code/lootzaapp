@@ -2,13 +2,12 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Sparkles, TrendingUp, Gift, Users, SearchX, UserPlus, ChevronUp, ChevronDown, type LucideIcon } from "lucide-react";
+import Link from "next/link";
+import { Sparkles, TrendingUp, Gift, Users, SearchX, UserPlus, ChevronUp, ChevronDown, Clapperboard, type LucideIcon } from "lucide-react";
 import { ProductVideoCard } from "@/components/product/ProductVideoCard";
 import { PostCard } from "@/components/feed/PostCard";
 import { CATEGORY_ICONS } from "@/lib/icons";
-import { feedPosts } from "@/lib/data/feedPosts";
 import { categories } from "@/lib/data/categories";
-import { getCreatorById } from "@/lib/data/creators";
 import { useAppState } from "@/lib/state/AppStateContext";
 import { useAllProducts } from "@/lib/hooks/useAllProducts";
 import { cn, postedAtToMinutes } from "@/lib/utils";
@@ -82,7 +81,9 @@ interface PersonalizationSignals {
  * backend would replace this with actual watch-time and embedding-based similarity.
  */
 function forYouScore(item: FeedItem, signals: PersonalizationSignals, isPromoted: (productId: string) => boolean): number {
-  let score = item.kind === "product" ? item.product.rating * item.product.likes : item.post.likes * 3;
+  // The +1 keeps brand-new content (no ratings/likes yet) from all scoring 0, which would
+  // make every multiplier below a no-op and flatten the feed into arbitrary order.
+  let score = 1 + (item.kind === "product" ? item.product.rating * item.product.likes : item.post.likes * 3);
 
   if (signals.followed.includes(item.creatorId)) score *= 1.8;
 
@@ -103,8 +104,19 @@ export function DiscoverContent() {
   const searchParams = useSearchParams();
   const [feedTab, setFeedTab] = useState("for-you");
   const [category, setCategory] = useState(() => searchParams.get("category") ?? "all");
-  const { followed, posts: userPosts, liked, saved, collection, clickedProductIds, watchedIds, isPromoted } =
-    useAppState();
+  const {
+    followed,
+    supabasePosts,
+    productsLoading,
+    postsLoading,
+    liked,
+    saved,
+    collection,
+    clickedProductIds,
+    watchedIds,
+    isPromoted,
+    getCreator,
+  } = useAppState();
   const allProducts = useAllProducts();
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
 
@@ -132,7 +144,7 @@ export function DiscoverContent() {
       category: product.category,
       product,
     }));
-    const postItems: FeedItem[] = [...userPosts, ...feedPosts].map((post) => ({
+    const postItems: FeedItem[] = supabasePosts.map((post) => ({
       kind: "post",
       id: post.id,
       creatorId: post.creatorId,
@@ -140,7 +152,7 @@ export function DiscoverContent() {
       post,
     }));
     return [...productItems, ...postItems];
-  }, [userPosts, allProducts]);
+  }, [supabasePosts, allProducts]);
 
   const filtered = useMemo(() => {
     let list = feed;
@@ -151,7 +163,7 @@ export function DiscoverContent() {
 
     if (query) {
       list = list.filter((item) => {
-        const creator = getCreatorById(item.creatorId);
+        const creator = getCreator(item.creatorId);
         const text =
           item.kind === "product"
             ? `${item.product.title} ${item.product.tagline}`
@@ -175,19 +187,9 @@ export function DiscoverContent() {
     }
 
     return list;
-  }, [feed, category, query, feedTab, followed, signals, isPromoted]);
+  }, [feed, category, query, feedTab, followed, signals, isPromoted, getCreator]);
 
-  // The feed is a snap-scrolling stream, not a paginated list — it should never
-  // visibly dead-end just because the catalog is small. Repeating the filtered
-  // list is simpler and safer than a real infinite-scroll/load-more mechanism,
-  // and is invisible to the user since cards only differ by which lap they're
-  // on. Capped so a large catalog doesn't get tiled into an enormous DOM.
-  const loopedFeed = useMemo(() => {
-    if (filtered.length === 0) return [] as { item: FeedItem; lap: number }[];
-    const laps = filtered.length >= 40 ? 2 : Math.min(8, Math.ceil(120 / filtered.length));
-    return Array.from({ length: laps }, (_, lap) => filtered.map((item) => ({ item, lap }))).flat();
-  }, [filtered]);
-
+  const loading = productsLoading || postsLoading;
   const showFollowingEmpty = feedTab === "following" && followed.length === 0;
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -208,7 +210,16 @@ export function DiscoverContent() {
             its own dark background and shadow, so this must stay visually invisible or
             it paints a black panel behind the action rail too. */}
         <div className="relative h-[calc(100dvh-134px)] w-full overflow-hidden bg-ink md:h-[calc(100dvh-64px-2rem)] md:rounded-3xl md:shadow-card-hover lg:rounded-none lg:bg-transparent lg:shadow-none">
-          {showFollowingEmpty ? (
+          {loading && feed.length === 0 ? (
+            <div className="h-full w-full animate-shimmer bg-gradient-to-r from-white/5 via-white/10 to-white/5" />
+          ) : feed.length === 0 ? (
+            <FeedEmptyState
+              icon={Clapperboard}
+              title="Nothing has dropped yet"
+              body="When creators list products or share videos and photos, they will show up here."
+              action={{ href: "/sell", label: "Drop something" }}
+            />
+          ) : showFollowingEmpty ? (
             <FeedEmptyState
               icon={UserPlus}
               title="Follow creators to see their drops"
@@ -236,18 +247,21 @@ export function DiscoverContent() {
                 </div>
               </div>
 
-              {loopedFeed.map(({ item, lap }) =>
+              {/* Each real item appears once. (The old demo build tiled a small catalog
+                  several times so the feed never dead-ended; with real content that would
+                  show one genuine post as many duplicates.) */}
+              {filtered.map((item) =>
                 item.kind === "product" ? (
-                  <ProductVideoCard key={`${item.id}-${lap}`} product={item.product} />
+                  <ProductVideoCard key={item.id} product={item.product} />
                 ) : (
-                  <PostCard key={`${item.id}-${lap}`} post={item.post} />
+                  <PostCard key={item.id} post={item.post} />
                 )
               )}
             </div>
           )}
         </div>
 
-        {!showFollowingEmpty && filtered.length > 0 && (
+        {feed.length > 0 && !showFollowingEmpty && filtered.length > 0 && (
           <div className="absolute -right-20 top-1/2 hidden -translate-y-1/2 flex-col gap-3 lg:flex">
             <button
               type="button"
@@ -276,10 +290,12 @@ function FeedEmptyState({
   icon: Icon,
   title,
   body,
+  action,
 }: {
   icon: LucideIcon;
   title: string;
   body: string;
+  action?: { href: string; label: string };
 }) {
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-ink px-8 text-center text-white">
@@ -288,6 +304,14 @@ function FeedEmptyState({
       </span>
       <h3 className="font-display text-lg font-bold">{title}</h3>
       <p className="max-w-xs text-sm text-white/70">{body}</p>
+      {action && (
+        <Link
+          href={action.href}
+          className="mt-1 rounded-full bg-white px-5 py-2 text-sm font-semibold text-ink transition-colors hover:bg-white/90"
+        >
+          {action.label}
+        </Link>
+      )}
     </div>
   );
 }

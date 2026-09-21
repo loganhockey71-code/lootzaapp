@@ -2,7 +2,7 @@
  * XP is pure progression — it can never be spent (see lib/types.ts CoinTxn for
  * the separate, spendable Lootza Coins currency). Each level needs
  * `level * 1500` XP, matching the pace already shown on creator profiles
- * (e.g. the seed "pixelmax" profile sits at Level 4 needing 6,000 XP).
+ * (a Level 4 seller needs 6,000 XP).
  */
 export function xpThresholdForLevel(level: number): number {
   return level * 1500;

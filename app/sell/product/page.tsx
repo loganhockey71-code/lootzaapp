@@ -11,7 +11,6 @@ import { FileUploadZone } from "@/components/sell/FileUploadZone";
 import { ImageUploadZone } from "@/components/sell/ImageUploadZone";
 import { PayoutStatusBanner } from "@/components/sell/PayoutStatusBanner";
 import { categories } from "@/lib/data/categories";
-import { creators } from "@/lib/data/creators";
 import { CATEGORY_ICONS } from "@/lib/icons";
 import { useAppState } from "@/lib/state/AppStateContext";
 import {
@@ -25,7 +24,6 @@ import { fetchPayoutStatus, startPayoutOnboarding, type PayoutStatus } from "@/l
 import { cn, formatFileSize, formatPrice, slugify } from "@/lib/utils";
 import type { CategorySlug, Product } from "@/lib/types";
 
-const CURRENT_USER = creators.find((c) => c.id === "pixelmax")!;
 const STEPS = ["Basics", "File", "Details", "Pricing", "Review"];
 
 interface FormState {
@@ -75,7 +73,8 @@ const initialForm: FormState = {
 };
 
 export default function SellProductPage() {
-  const { user, addListing, createSupabaseProduct } = useAppState();
+  const { user, profile, createSupabaseProduct } = useAppState();
+  const sellerName = profile?.displayName?.trim() || profile?.username || user?.username || "You";
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<FormState>(initialForm);
   const [dropped, setDropped] = useState<Product | null>(null);
@@ -247,7 +246,6 @@ export default function SellProductPage() {
 
     const result = await createSupabaseProduct({
       id,
-      sellerId: user.id,
       title: form.title.trim(),
       tagline: form.tagline.trim(),
       description: form.description.split("\n").map((p) => p.trim()).filter(Boolean),
@@ -276,10 +274,8 @@ export default function SellProductPage() {
       return;
     }
 
-    // Same id/slug as the row that was just inserted, so this mirrors it into
-    // myListings (existing XP/challenge rewards, unchanged) without duplicating
-    // it once useAllProducts() also picks it up from Supabase.
-    addListing(result.product);
+    // The row was inserted with the signed-in user as its seller_id, and
+    // createSupabaseProduct already awarded the upload XP/challenge progress.
     setDropped(result.product);
   }
 
@@ -343,7 +339,7 @@ export default function SellProductPage() {
               <input
                 value={form.title}
                 onChange={(e) => update("title", e.target.value)}
-                placeholder="e.g. Neon Cyberpunk UI Kit"
+                placeholder="e.g. 30-Day Meal Planner, Lo-fi Beat Pack, Wedding Invite Template"
                 className="input"
               />
             </Field>
@@ -356,7 +352,7 @@ export default function SellProductPage() {
               />
             </Field>
             <Field label="Category">
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
                 {categories.map((cat) => {
                   const Icon = CATEGORY_ICONS[cat.slug];
                   return (
@@ -427,7 +423,7 @@ export default function SellProductPage() {
                       addIncluded();
                     }
                   }}
-                  placeholder="e.g. 40 Editable Screens"
+                  placeholder="e.g. 40 editable pages, 12 audio tracks, 5 video lessons"
                   className="input"
                 />
                 <Button type="button" variant="secondary" onClick={addIncluded}>
@@ -450,7 +446,7 @@ export default function SellProductPage() {
             <ChipField
               label="File types (optional)"
               hint="Add each extension, then press Enter."
-              placeholder="e.g. .fig"
+              placeholder="e.g. .pdf, .mp3, .zip"
               draft={form.fileTypeDraft}
               onDraftChange={(v) => update("fileTypeDraft", v)}
               items={form.fileTypes}
@@ -458,9 +454,9 @@ export default function SellProductPage() {
               onRemove={removeFileType}
             />
             <ChipField
-              label="Compatible with (optional)"
-              hint="Add each app or platform, then press Enter."
-              placeholder="e.g. Figma"
+              label="Works with (optional)"
+              hint="Apps or devices needed to open it, then press Enter."
+              placeholder="e.g. Excel, Photoshop, any PDF reader"
               draft={form.compatibleDraft}
               onDraftChange={(v) => update("compatibleDraft", v)}
               items={form.compatibleWith}
@@ -562,8 +558,8 @@ export default function SellProductPage() {
               />
               <div className="flex flex-col gap-2 bg-surface p-4">
                 <div className="flex items-center gap-2 text-xs text-ink-soft">
-                  <CreatorAvatar name={CURRENT_USER.name} seed={CURRENT_USER.avatarSeed} size={20} />
-                  {CURRENT_USER.name}
+                  <CreatorAvatar name={sellerName} seed={user?.id ?? "guest"} avatarUrl={profile?.avatarUrl} size={20} />
+                  {sellerName}
                 </div>
                 <span className="inline-flex w-fit items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-ink-soft">
                   <Sparkles size={12} aria-hidden /> Rarity calculated after drop

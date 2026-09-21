@@ -75,3 +75,84 @@ export async function removeUploadedFiles(previewPath: string | null, productFil
   if (productFilePath) jobs.push(supabase.storage.from(PRODUCT_FILES_BUCKET).remove([productFilePath]));
   await Promise.allSettled(jobs);
 }
+
+// ---------------------------------------------------------------------------
+// Avatars + post media. Both buckets are public-read and only writable inside
+// the caller's own "<user id>/" folder (see 20260922_ownership_posts_avatars.sql).
+// ---------------------------------------------------------------------------
+
+export const AVATARS_BUCKET = "avatars";
+export const POST_MEDIA_BUCKET = "post-media";
+
+export const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5MB — matches the bucket's file_size_limit
+export const MAX_POST_MEDIA_BYTES = 50 * 1024 * 1024; // 50MB — matches the bucket's file_size_limit
+
+const AVATAR_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
+export function validateAvatar(file: File): string | null {
+  if (!AVATAR_TYPES.includes(file.type)) return "Profile picture must be a JPG, PNG, WebP or GIF image.";
+  if (file.size > MAX_AVATAR_BYTES) return `Profile picture must be under ${MAX_AVATAR_BYTES / (1024 * 1024)}MB.`;
+  return null;
+}
+
+export function validatePostMedia(file: Blob, kind: "image" | "video"): string | null {
+  if (!file.type.startsWith(`${kind}/`)) return `That file isn't a ${kind}.`;
+  if (file.size > MAX_POST_MEDIA_BYTES) return `Files must be under ${MAX_POST_MEDIA_BYTES / (1024 * 1024)}MB.`;
+  return null;
+}
+
+function extensionFor(type: string): string {
+  const subtype = type.split("/")[1]?.split(";")[0] ?? "bin";
+  return subtype === "jpeg" ? "jpg" : subtype === "quicktime" ? "mov" : subtype.replace(/[^a-z0-9]/gi, "") || "bin";
+}
+
+/**
+ * Uploads a new avatar to "<userId>/avatar-<timestamp>.<ext>" and returns its public URL.
+ * A fresh filename per upload (instead of overwriting one fixed path) sidesteps CDN/browser
+ * caching of the old image. Older avatars in the folder are removed on a best-effort basis.
+ */
+export async function uploadAvatar(userId: string, file: File): Promise<{ path: string; publicUrl: string }> {
+  const path = `${userId}/avatar-${Date.now()}.${extensionFor(file.type)}`;
+  const { error } = await supabase.storage
+    .from(AVATARS_BUCKET)
+    .upload(path, file, { upsert: false, contentType: file.type, cacheControl: "31536000" });
+  if (error) throw new Error(error.message);
+
+  const { data } = supabase.storage.from(AVATARS_BUCKET).getPublicUrl(path);
+  return { path, publicUrl: data.publicUrl };
+}
+
+/** Best-effort removal of every avatar in the user's folder except `keepPath`. Never throws. */
+export async function pruneOldAvatars(userId: string, keepPath: string): Promise<void> {
+  try {
+    const { data } = await supabase.storage.from(AVATARS_BUCKET).list(userId);
+    const stale = (data ?? []).map((f) => `${userId}/${f.name}`).filter((p) => p !== keepPath);
+    if (stale.length > 0) await supabase.storage.from(AVATARS_BUCKET).remove(stale);
+  } catch {
+    // Leftover files are harmless; never let cleanup mask a successful upload.
+  }
+}
+
+export async function removeAvatarFile(path: string): Promise<void> {
+  await Promise.allSettled([supabase.storage.from(AVATARS_BUCKET).remove([path])]);
+}
+
+/** Uploads a post's photo/video to "<userId>/<postId>.<ext>" and returns its public URL. */
+export async function uploadPostMedia(
+  userId: string,
+  postId: string,
+  file: Blob
+): Promise<{ path: string; publicUrl: string }> {
+  const path = `${userId}/${postId}.${extensionFor(file.type)}`;
+  const { error } = await supabase.storage
+    .from(POST_MEDIA_BUCKET)
+    .upload(path, file, { upsert: true, contentType: file.type });
+  if (error) throw new Error(error.message);
+
+  const { data } = supabase.storage.from(POST_MEDIA_BUCKET).getPublicUrl(path);
+  return { path, publicUrl: data.publicUrl };
+}
+
+export async function removePostMedia(path: string): Promise<void> {
+  await Promise.allSettled([supabase.storage.from(POST_MEDIA_BUCKET).remove([path])]);
+}

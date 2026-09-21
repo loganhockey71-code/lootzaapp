@@ -10,14 +10,13 @@ import { CreatorAvatar } from "@/components/creator/CreatorAvatar";
 import { Button } from "@/components/ui/Button";
 import { CoinPill } from "@/components/wallet/CoinPill";
 import { useAppState } from "@/lib/state/AppStateContext";
-import { creators } from "@/lib/data/creators";
-
-const CURRENT_USER = creators.find((c) => c.id === "pixelmax")!;
 
 /** Slim YouTube-style top bar: logo, search, and account actions. Primary nav lives in the Sidebar. */
 export function TopBar() {
   const router = useRouter();
-  const { user, logOut, coins, unreadNotificationCount } = useAppState();
+  const { user, profile, logOut, coins, unreadNotificationCount } = useAppState();
+  const displayName = profile?.displayName?.trim() || profile?.username || user?.username || "";
+  const handle = profile?.username ?? user?.username ?? "";
   const [profileOpen, setProfileOpen] = useState(false);
 
   return (
@@ -47,19 +46,19 @@ export function TopBar() {
 
           <div className="relative" onMouseEnter={() => setProfileOpen(true)} onMouseLeave={() => setProfileOpen(false)}>
             <button className="flex items-center gap-1 rounded-full p-0.5" aria-label="Profile menu">
-              <CreatorAvatar name={CURRENT_USER.name} seed={CURRENT_USER.avatarSeed} size={34} />
+              <CreatorAvatar name={displayName} seed={user?.id ?? "guest"} avatarUrl={profile?.avatarUrl} size={34} />
               <ChevronDown size={14} className="text-ink-soft" aria-hidden />
             </button>
             {profileOpen && (
               <div className="absolute right-0 top-full w-52 animate-pop-in rounded-2xl border border-border bg-surface p-2 shadow-card-hover">
                 {user && (
                   <div className="border-b border-border px-3 pb-2 pt-1">
-                    <p className="truncate text-sm font-bold text-ink">{user.username}</p>
+                    <p className="truncate text-sm font-bold text-ink">{displayName}</p>
                     <p className="truncate text-xs text-ink-soft">{user.email}</p>
                   </div>
                 )}
                 <Link
-                  href={`/@${CURRENT_USER.handle}`}
+                  href={`/@${handle}`}
                   className="mt-1 block rounded-xl px-3 py-2 text-sm font-medium text-ink hover:bg-surface-2"
                 >
                   View Profile

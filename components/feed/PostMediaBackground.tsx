@@ -4,9 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import type { CategorySlug, FeedPost } from "@/lib/types";
 import { ProductArtwork } from "@/components/product/ProductArtwork";
 import { pickFrom } from "@/lib/utils";
+import { categories } from "@/lib/data/categories";
 import { cn } from "@/lib/utils";
 
-const FALLBACK_CATEGORIES: CategorySlug[] = ["gaming", "graphics", "social", "web", "creator", "ai"];
+const FALLBACK_CATEGORIES: CategorySlug[] = categories.map((c) => c.slug);
 
 /**
  * Renders a feed post's media: a real video, a real image (data/blob URL), or

@@ -10,7 +10,7 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://lootza.vercel.app"),
   title: "Lootza — Create. Drop. Collect.",
   description:
-    "The gamified marketplace to discover, buy, collect, and sell digital products — game assets, UI kits, creator tools, and more.",
+    "The gamified marketplace to discover, buy, collect, and sell digital products — ebooks, music, templates, art, courses, software, and more.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

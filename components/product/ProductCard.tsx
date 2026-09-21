@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { Heart, Package, BadgeCheck } from "lucide-react";
-import { getCreatorById } from "@/lib/data/creators";
+import { Heart, Package } from "lucide-react";
 import type { Product } from "@/lib/types";
 import { useAppState } from "@/lib/state/AppStateContext";
+import { unknownCreator } from "@/lib/creators";
 import { cn, discountPercent, formatCompactNumber, formatPrice } from "@/lib/utils";
 import { ProductArtwork } from "./ProductArtwork";
 import { RarityBadge } from "@/components/ui/RarityBadge";
@@ -16,15 +16,14 @@ import { useAllProducts } from "@/lib/hooks/useAllProducts";
 import { CountdownTimer } from "./CountdownTimer";
 
 export function ProductCard({ product, priority }: { product: Product; priority?: boolean }) {
-  const creator = getCreatorById(product.creatorId);
-  const { isLiked, toggleLike, isPromoted } = useAppState();
+  const { isLiked, toggleLike, isPromoted, getCreator } = useAppState();
+  const creator = getCreator(product.creatorId) ?? unknownCreator(product.creatorId);
   const allProducts = useAllProducts();
   const rarity = calculateRarity(product, allProducts);
   const liked = isLiked(product.id);
   const discount = discountPercent(product.price, product.originalPrice);
   const sponsored = isPromoted(product.id);
 
-  if (!creator) return null;
 
   return (
     <div className="group flex flex-col overflow-hidden rounded-2xl bg-surface shadow-card ring-1 ring-border transition-all duration-200 hover:-translate-y-1 hover:shadow-card-hover">
@@ -37,7 +36,6 @@ export function ProductCard({ product, priority }: { product: Product; priority?
 
         <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-3">
           <div className="flex flex-wrap gap-1.5">
-            {!product.sellerId && <Badge tone="neutral">Demo</Badge>}
             {product.badge && <Badge tone={product.badge} />}
             {product.drop && (
               <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2.5 py-1 text-xs font-bold text-white">
@@ -72,7 +70,6 @@ export function ProductCard({ product, priority }: { product: Product; priority?
         >
           <CreatorAvatar name={creator.name} seed={creator.avatarSeed} avatarUrl={creator.avatar} size={20} />
           <span className="font-medium text-ink">{creator.name}</span>
-          {creator.verified && <BadgeCheck size={14} className="text-blue-500" aria-hidden />}
           <span className="ml-auto shrink-0">{product.postedAt}</span>
         </Link>
 

@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Heart, Bookmark, Share2, ShoppingBag, BadgeCheck, MessageCircle, Video, Users } from "lucide-react";
+import { Heart, Bookmark, Share2, ShoppingBag, MessageCircle, Video, Users } from "lucide-react";
 import type { FeedPost } from "@/lib/types";
-import { getCreatorById } from "@/lib/data/creators";
 import { useAppState } from "@/lib/state/AppStateContext";
+import { unknownCreator } from "@/lib/creators";
 import { formatCompactNumber, formatPrice } from "@/lib/utils";
 import { useInView } from "@/lib/hooks/useInView";
 import { useAllProducts } from "@/lib/hooks/useAllProducts";
@@ -19,13 +19,13 @@ import { RailButton } from "@/components/feed/FeedRailButton";
 
 export function PostCard({ post }: { post: FeedPost }) {
   const { ref, inView } = useInView<HTMLDivElement>(0.65);
-  const { isLiked, toggleLike, isSaved, toggleSave, recordWatch, recordClick, commentsFor } = useAppState();
+  const { isLiked, toggleLike, isSaved, toggleSave, recordWatch, recordClick, commentsFor, getCreator } = useAppState();
   const allProducts = useAllProducts();
   const [buyOpen, setBuyOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const creator = getCreatorById(post.creatorId);
-  const collaborator = post.collaboratorId ? getCreatorById(post.collaboratorId) : null;
+  const creator = getCreator(post.creatorId) ?? unknownCreator(post.creatorId);
+  const collaborator = post.collaboratorId ? getCreator(post.collaboratorId) : null;
   const linkedProduct = post.linkedProductId ? allProducts.find((p) => p.id === post.linkedProductId) ?? null : null;
 
   const liked = isLiked(post.id);
@@ -48,7 +48,6 @@ export function PostCard({ post }: { post: FeedPost }) {
     }
   }
 
-  if (!creator) return null;
 
   return (
     <div ref={ref} className="snap-card relative h-full w-full shrink-0 lg:flex lg:items-stretch lg:gap-4">
@@ -72,7 +71,6 @@ export function PostCard({ post }: { post: FeedPost }) {
             <Link href={`/@${creator.handle}`} className="flex items-center gap-2 text-sm">
               <CreatorAvatar name={creator.name} seed={creator.avatarSeed} avatarUrl={creator.avatar} size={30} />
               <span className="font-semibold">{creator.name}</span>
-              {creator.verified && <BadgeCheck size={15} className="text-primary-300" aria-hidden />}
             </Link>
 
             {collaborator && (

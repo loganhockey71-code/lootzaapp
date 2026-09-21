@@ -1,25 +1,26 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Compass, Gift, Search, SearchX, BadgeCheck } from "lucide-react";
+import { Compass, Gift, Search, SearchX } from "lucide-react";
 import { ProductGrid } from "@/components/product/ProductGrid";
 import { CreatorAvatar } from "@/components/creator/CreatorAvatar";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { creators } from "@/lib/data/creators";
-import { feedPosts } from "@/lib/data/feedPosts";
 import { categories } from "@/lib/data/categories";
 import { useAppState } from "@/lib/state/AppStateContext";
 import { useAllProducts } from "@/lib/hooks/useAllProducts";
-import { formatCompactNumber } from "@/lib/utils";
+import { searchProfiles } from "@/lib/supabase/profiles";
+import { profileToCreator } from "@/lib/creators";
+import type { Creator } from "@/lib/types";
 
 export function SearchContent() {
   const searchParams = useSearchParams();
   const query = (searchParams.get("q") ?? "").trim();
   const categorySlug = searchParams.get("category") ?? "all";
   const allProducts = useAllProducts();
-  const { posts: userPosts } = useAppState();
+  const { supabasePosts, getCreator } = useAppState();
 
   const isHashtag = query.startsWith("#");
   const q = query.toLowerCase();
@@ -28,12 +29,23 @@ export function SearchContent() {
   if (categorySlug !== "all") matchProducts = matchProducts.filter((p) => p.category === categorySlug);
   if (q) matchProducts = matchProducts.filter((p) => `${p.title} ${p.tagline}`.toLowerCase().includes(q));
 
-  const matchCreators =
-    q && !isHashtag ? creators.filter((c) => c.name.toLowerCase().includes(q) || c.handle.toLowerCase().includes(q)) : [];
+  // Creators are real accounts, looked up in Supabase for the current query.
+  const [creatorResults, setCreatorResults] = useState<{ query: string; creators: Creator[] } | null>(null);
+  useEffect(() => {
+    if (!q || isHashtag) return;
+    let active = true;
+    searchProfiles(q, 12)
+      .then((list) => {
+        if (active) setCreatorResults({ query: q, creators: list.map(profileToCreator) });
+      })
+      .catch((err: Error) => console.error("Creator search failed:", err.message));
+    return () => {
+      active = false;
+    };
+  }, [q, isHashtag]);
+  const matchCreators = creatorResults && creatorResults.query === q && !isHashtag ? creatorResults.creators : [];
 
-  const matchPosts = isHashtag
-    ? [...userPosts, ...feedPosts].filter((p) => p.caption.toLowerCase().includes(q))
-    : [];
+  const matchPosts = isHashtag ? supabasePosts.filter((p) => p.caption.toLowerCase().includes(q)) : [];
 
   const categoryName = categories.find((c) => c.slug === categorySlug)?.name;
   const params = new URLSearchParams();
@@ -78,11 +90,8 @@ export function SearchContent() {
               >
                 <CreatorAvatar name={c.name} seed={c.avatarSeed} avatarUrl={c.avatar} size={32} />
                 <div>
-                  <p className="flex items-center gap-1 text-sm font-bold text-ink">
-                    {c.name}
-                    {c.verified && <BadgeCheck size={13} className="text-blue-500" aria-hidden />}
-                  </p>
-                  <p className="text-xs text-ink-soft">{formatCompactNumber(c.followers)} followers</p>
+                  <p className="text-sm font-bold text-ink">{c.name}</p>
+                  <p className="text-xs text-ink-soft">@{c.handle}</p>
                 </div>
               </Link>
             ))}
@@ -98,7 +107,7 @@ export function SearchContent() {
           ) : (
             <div className="flex flex-col gap-2">
               {matchPosts.map((post) => {
-                const creator = creators.find((c) => c.id === post.creatorId);
+                const creator = getCreator(post.creatorId);
                 if (!creator) return null;
                 return (
                   <Link

@@ -1,11 +1,14 @@
+"use client";
+
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { categories } from "@/lib/data/categories";
-import { products } from "@/lib/data/products";
+import { useAllProducts } from "@/lib/hooks/useAllProducts";
 import { CATEGORY_ICONS } from "@/lib/icons";
 
 export default function CategoriesPage() {
+  const products = useAllProducts();
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
       <PageHeader title="Categories" subtitle="Browse every corner of the marketplace." />

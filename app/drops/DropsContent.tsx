@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ArrowRight, BadgeCheck, Flame, Sparkles, Timer, Zap, SearchX } from "lucide-react";
+import { ArrowRight, Flame, Sparkles, Timer, Zap, SearchX, Gift } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ProductGrid } from "@/components/product/ProductGrid";
@@ -11,8 +11,9 @@ import { ProductArtwork } from "@/components/product/ProductArtwork";
 import { CreatorAvatar } from "@/components/creator/CreatorAvatar";
 import { Badge } from "@/components/ui/Badge";
 import { CountdownTimer } from "@/components/product/CountdownTimer";
-import { getCreatorById } from "@/lib/data/creators";
-import { products } from "@/lib/data/products";
+import { useAppState } from "@/lib/state/AppStateContext";
+import { useAllProducts } from "@/lib/hooks/useAllProducts";
+import { unknownCreator } from "@/lib/creators";
 import { postedAtToMinutes, formatPrice } from "@/lib/utils";
 import type { Product } from "@/lib/types";
 
@@ -49,13 +50,15 @@ export function DropsContent() {
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
   const category = searchParams.get("category") ?? "all";
   const searching = query.length > 0 || category !== "all";
+  const products = useAllProducts();
+  const { productsLoading, getCreator } = useAppState();
 
   const filteredProducts = useMemo(() => {
     let list = products;
     if (category !== "all") list = list.filter((p) => p.category === category);
     if (query) list = list.filter((p) => `${p.title} ${p.tagline}`.toLowerCase().includes(query));
     return list;
-  }, [category, query]);
+  }, [products, category, query]);
 
   const sorted = useMemo(
     () => [...filteredProducts].sort((a, b) => postedAtToMinutes(a.postedAt) - postedAtToMinutes(b.postedAt)),
@@ -63,12 +66,35 @@ export function DropsContent() {
   );
   const latest = sorted[0];
   const rest = sorted.slice(1);
-  const latestCreator = latest ? getCreatorById(latest.creatorId) : null;
+  const latestCreator = latest ? (getCreator(latest.creatorId) ?? unknownCreator(latest.creatorId)) : null;
 
   const eventDrops = filteredProducts.filter((p) => p.drop?.tag === "event");
   const limitedDrops = filteredProducts.filter((p) => p.drop?.tag === "limited");
   const trending = rest.filter((p) => p.badge === "trending" || p.sold > 1000).sort((a, b) => b.sold - a.sold);
   const newReleases = rest.filter((p) => p.badge === "new");
+
+  if (products.length === 0) {
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+        <PageHeader title="Latest drops" subtitle="Fresh releases, limited runs, and live events, newest first." />
+        {productsLoading ? (
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="animate-shimmer aspect-[4/3] rounded-2xl bg-surface-2" />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            icon={Gift}
+            title="No drops yet"
+            body="Nothing has been listed on Lootza yet. Be the first to drop a product."
+            actionLabel="Drop a product"
+            actionHref="/sell"
+          />
+        )}
+      </div>
+    );
+  }
 
   if (searching && filteredProducts.length === 0) {
     return (
@@ -118,7 +144,6 @@ export function DropsContent() {
             <div className="flex items-center gap-2 text-sm">
               <CreatorAvatar name={latestCreator.name} seed={latestCreator.avatarSeed} size={24} />
               <span className="font-semibold text-ink">{latestCreator.name}</span>
-              {latestCreator.verified && <BadgeCheck size={16} className="text-blue-500" aria-hidden />}
             </div>
             <div className="flex items-center gap-3">
               <span className="text-2xl font-extrabold text-ink">{formatPrice(latest.price)}</span>
@@ -155,8 +180,12 @@ export function DropsContent() {
         products={newReleases}
       />
 
-      <h2 className="font-display mb-4 text-lg font-extrabold text-ink">{searching ? "All matching drops" : "More drops"}</h2>
-      <ProductGrid products={searching ? filteredProducts : rest} />
+      {(searching ? filteredProducts : rest).length > 0 && (
+        <>
+          <h2 className="font-display mb-4 text-lg font-extrabold text-ink">{searching ? "All matching drops" : "More drops"}</h2>
+          <ProductGrid products={searching ? filteredProducts : rest} />
+        </>
+      )}
     </div>
   );
 }

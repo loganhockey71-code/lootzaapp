@@ -39,3 +39,20 @@ export async function fetchMyPurchases(buyerId: string): Promise<PurchaseRecord[
   if (error) throw new Error(error.message);
   return (data as PurchaseRow[]).map(mapPurchaseRow);
 }
+
+/**
+ * A seller's own completed sales — the real source of dashboard revenue. Allowed by the
+ * "Sellers can view sales of their products" RLS policy; each seller can only ever read
+ * rows where they are the seller, so two accounts never see each other's sales.
+ */
+export async function fetchMySales(sellerId: string): Promise<PurchaseRecord[]> {
+  const { data, error } = await supabase
+    .from("purchases")
+    .select("*")
+    .eq("seller_id", sellerId)
+    .eq("status", "completed")
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return (data as PurchaseRow[]).map(mapPurchaseRow);
+}

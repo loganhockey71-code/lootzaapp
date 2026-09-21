@@ -6,7 +6,19 @@ export type CategorySlug =
   | "social"
   | "web"
   | "creator"
-  | "ai";
+  | "ai"
+  | "ebooks"
+  | "courses"
+  | "music"
+  | "video"
+  | "photography"
+  | "software"
+  | "templates"
+  | "printables"
+  | "fonts"
+  | "art"
+  | "business"
+  | "other";
 
 export interface Category {
   slug: CategorySlug;
@@ -22,24 +34,23 @@ export interface CreatorBadge {
   label: string;
 }
 
+/**
+ * A public-facing seller/author, built from a real `public.profiles` row (see
+ * lib/creators.ts). There is no fabricated data here: anything Lootza can't
+ * actually measure (follower counts, response times, review percentages) is
+ * simply not part of this type.
+ */
 export interface Creator {
   id: string;
   handle: string;
   name: string;
   avatar: string | null;
   avatarSeed: string;
-  tagline: string;
   bio: string;
-  verified: boolean;
   level: number;
   xp: number;
   xpToNextLevel: number;
-  sellerTier: string;
   joined: string;
-  followers: number;
-  positiveReviewPct: number;
-  responseTime: string;
-  badges: CreatorBadge[];
 }
 
 export interface Review {

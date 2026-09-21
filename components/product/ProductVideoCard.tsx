@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Heart, Bookmark, Share2, ShoppingBag, BadgeCheck, MessageCircle } from "lucide-react";
+import { Heart, Bookmark, Share2, ShoppingBag, MessageCircle } from "lucide-react";
 import type { Product } from "@/lib/types";
-import { getCreatorById } from "@/lib/data/creators";
 import { useAppState } from "@/lib/state/AppStateContext";
+import { unknownCreator } from "@/lib/creators";
 import { formatCompactNumber, formatPrice } from "@/lib/utils";
 import { useInView } from "@/lib/hooks/useInView";
 import { ProductVideoBackground } from "./ProductVideoBackground";
@@ -21,13 +21,13 @@ import { RailButton } from "@/components/feed/FeedRailButton";
 
 export function ProductVideoCard({ product }: { product: Product }) {
   const { ref, inView } = useInView<HTMLDivElement>(0.65);
-  const { isLiked, toggleLike, isSaved, toggleSave, recordWatch, recordClick, commentsFor } = useAppState();
+  const { isLiked, toggleLike, isSaved, toggleSave, recordWatch, recordClick, commentsFor, getCreator } = useAppState();
   const allProducts = useAllProducts();
   const rarity = calculateRarity(product, allProducts);
   const [buyOpen, setBuyOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const creator = getCreatorById(product.creatorId);
+  const creator = getCreator(product.creatorId) ?? unknownCreator(product.creatorId);
 
   const liked = isLiked(product.id);
   const saved = isSaved(product.id);
@@ -49,7 +49,6 @@ export function ProductVideoCard({ product }: { product: Product }) {
     }
   }
 
-  if (!creator) return null;
 
   return (
     <div ref={ref} className="snap-card relative h-full w-full shrink-0 lg:flex lg:items-stretch lg:gap-4">
@@ -63,7 +62,6 @@ export function ProductVideoCard({ product }: { product: Product }) {
 
         <div className="absolute left-3 top-3 flex flex-wrap items-center gap-1.5">
           <RarityBadge rarity={rarity} />
-          {!product.sellerId && <Badge tone="neutral">Demo</Badge>}
           {product.badge && <Badge tone={product.badge} />}
           {product.drop && (
             <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2.5 py-1 text-xs font-bold text-white">
@@ -77,7 +75,6 @@ export function ProductVideoCard({ product }: { product: Product }) {
             <Link href={`/@${creator.handle}`} className="flex items-center gap-2 text-sm">
               <CreatorAvatar name={creator.name} seed={creator.avatarSeed} avatarUrl={creator.avatar} size={30} />
               <span className="font-semibold">{creator.name}</span>
-              {creator.verified && <BadgeCheck size={15} className="text-primary-300" aria-hidden />}
             </Link>
 
             <Link href={`/product/${product.slug}`} onClick={() => recordClick(product.id)}>

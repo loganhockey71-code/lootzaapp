@@ -3,22 +3,23 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Compass, Gift, Plus, Package, type LucideIcon } from "lucide-react";
-import { creators } from "@/lib/data/creators";
 import { cn } from "@/lib/utils";
+import { useAppState } from "@/lib/state/AppStateContext";
 import { CreatorAvatar } from "@/components/creator/CreatorAvatar";
 
-const CURRENT_USER = creators.find((c) => c.id === "pixelmax")!;
-
-const items: { href: string; label: string; icon: LucideIcon | "profile" }[] = [
+const baseItems: { href: string; label: string; icon: LucideIcon | "profile" }[] = [
   { href: "/discover", label: "Discover", icon: Compass },
   { href: "/drops", label: "Drops", icon: Gift },
   { href: "/sell", label: "Sell", icon: Plus },
   { href: "/collection", label: "Collection", icon: Package },
-  { href: `/@${CURRENT_USER.handle}`, label: "Profile", icon: "profile" },
 ];
 
 export function BottomNav() {
   const pathname = usePathname();
+  const { user, profile } = useAppState();
+  const handle = profile?.username ?? user?.username ?? "";
+  const displayName = profile?.displayName?.trim() || handle;
+  const items = [...baseItems, { href: `/@${handle}`, label: "Profile", icon: "profile" as const }];
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-surface/95 backdrop-blur md:hidden">
@@ -42,8 +43,9 @@ export function BottomNav() {
                 </span>
               ) : item.icon === "profile" ? (
                 <CreatorAvatar
-                  name={CURRENT_USER.name}
-                  seed={CURRENT_USER.avatarSeed}
+                  name={displayName}
+                  seed={user?.id ?? "guest"}
+                  avatarUrl={profile?.avatarUrl}
                   size={22}
                   className={cn("ring-2", active ? "ring-primary-500" : "ring-transparent")}
                 />

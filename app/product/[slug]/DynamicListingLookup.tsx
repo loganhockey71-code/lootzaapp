@@ -3,19 +3,15 @@
 import { notFound } from "next/navigation";
 import { useAppState } from "@/lib/state/AppStateContext";
 import { useAllProducts } from "@/lib/hooks/useAllProducts";
-import { getCreatorById } from "@/lib/data/creators";
-import { getProductsByCategory } from "@/lib/data/products";
+import { unknownCreator } from "@/lib/creators";
 import { ProductDetailClient } from "./ProductDetailClient";
 
 /**
- * Products created through the /sell/product wizard (real Supabase listings, or
- * locally-created ones) don't exist in the seed catalog the server component's
- * generateStaticParams knows about, so they can't be resolved there. This looks
- * them up client-side once both local state and the Supabase products fetch
- * have settled.
+ * Resolves a product page's slug to its real Supabase listing client-side, once
+ * both local state and the products fetch have settled.
  */
 export function DynamicListingLookup({ slug }: { slug: string }) {
-  const { hydrated, productsLoading } = useAppState();
+  const { hydrated, productsLoading, getCreator } = useAppState();
   const allProducts = useAllProducts();
 
   if (!hydrated || productsLoading) {
@@ -36,8 +32,8 @@ export function DynamicListingLookup({ slug }: { slug: string }) {
   const product = allProducts.find((p) => p.slug === slug);
   if (!product) notFound();
 
-  const creator = getCreatorById(product.creatorId)!;
-  const related = getProductsByCategory(product.category).slice(0, 6);
+  const creator = getCreator(product.creatorId) ?? unknownCreator(product.creatorId);
+  const related = allProducts.filter((p) => p.category === product.category && p.id !== product.id).slice(0, 6);
 
   return <ProductDetailClient product={product} creator={creator} related={related} />;
 }

@@ -2,10 +2,13 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { BadgeCheck, Check, Plus, Award, Video, ImageIcon, Heart } from "lucide-react";
-import type { Creator, Product } from "@/lib/types";
+import { Check, Plus, Award, Video, ImageIcon, Heart } from "lucide-react";
+import type { Creator, FeedPost, Product } from "@/lib/types";
 import { useAppState } from "@/lib/state/AppStateContext";
 import { CreatorAvatar } from "@/components/creator/CreatorAvatar";
+import { AvatarUploader } from "@/components/profile/AvatarUploader";
+import { earnedBadges, sellerTierForLevel } from "@/lib/creators";
+import { xpThresholdForLevel } from "@/lib/leveling";
 import { Button } from "@/components/ui/Button";
 import { XPBar } from "@/components/ui/XPBar";
 import { Tabs } from "@/components/ui/Tabs";
@@ -13,7 +16,6 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ProductGrid } from "@/components/product/ProductGrid";
 import { BADGE_ICONS } from "@/lib/icons";
 import { getCosmetic } from "@/lib/data/cosmetics";
-import { feedPosts } from "@/lib/data/feedPosts";
 import { hashSeed, formatCompactNumber } from "@/lib/utils";
 
 const BANNER_PALETTE: [string, string][] = [
@@ -32,19 +34,25 @@ const TABS = [
 
 export function CreatorProfileClient({
   creator,
-  products: baseProducts,
+  products,
+  posts,
   isCurrentUser,
 }: {
   creator: Creator;
+  /** Only this creator's own listings (already filtered by seller id). */
   products: Product[];
+  /** Only this creator's own posts (already filtered by author id). */
+  posts: FeedPost[];
   isCurrentUser: boolean;
 }) {
-  const { isFollowed, toggleFollow, myListings, posts: userPosts, equipped, user, supabaseProducts } = useAppState();
+  const { isFollowed, toggleFollow, equipped, level: myLevel, xp: myXp } = useAppState();
   const [tab, setTab] = useState("products");
   const following = isFollowed(creator.id);
-  const myRealProducts = supabaseProducts.filter((p) => p.sellerId === user?.id);
-  const products = isCurrentUser ? [...myListings, ...myRealProducts, ...baseProducts] : baseProducts;
-  const posts = [...userPosts, ...feedPosts].filter((p) => p.creatorId === creator.id);
+  // The signed-in user's level/xp live in the local progression system; anyone else's
+  // is whatever their profile row says.
+  const level = isCurrentUser ? myLevel : creator.level;
+  const xp = isCurrentUser ? myXp : creator.xp;
+  const badges = earnedBadges(products);
   const [c1, c2] = BANNER_PALETTE[hashSeed(creator.avatarSeed) % BANNER_PALETTE.length];
 
   const totalSales = products.reduce((sum, p) => sum + p.sold, 0);
@@ -74,18 +82,21 @@ export function CreatorProfileClient({
                   : undefined
               }
             >
-              <CreatorAvatar
-                name={creator.name}
-                seed={creator.avatarSeed}
-                avatarUrl={creator.avatar}
-                size={104}
-                className="border-4 border-bg text-3xl shadow-card-hover"
-              />
+              {isCurrentUser ? (
+                <AvatarUploader size={104} avatarClassName="border-4 border-bg text-3xl shadow-card-hover" />
+              ) : (
+                <CreatorAvatar
+                  name={creator.name}
+                  seed={creator.avatarSeed}
+                  avatarUrl={creator.avatar}
+                  size={104}
+                  className="border-4 border-bg text-3xl shadow-card-hover"
+                />
+              )}
             </div>
             <div className="pb-1">
               <h1 className="flex items-center gap-1.5 font-display text-2xl font-extrabold text-ink">
                 {creator.name}
-                {creator.verified && <BadgeCheck size={18} className="text-blue-500" aria-hidden />}
               </h1>
               <p className="text-sm text-ink-soft">@{creator.handle}</p>
               {equippedTitle && (
@@ -123,13 +134,13 @@ export function CreatorProfileClient({
           )}
         </div>
 
-        <p className="mt-4 max-w-xl text-ink-soft">{creator.tagline}</p>
+        {creator.bio && <p className="mt-4 max-w-xl text-ink-soft">{creator.bio}</p>}
 
         <div className="mt-5 flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-primary-50 px-3 py-1 text-xs font-bold text-primary-700">
-            <Award size={14} aria-hidden /> Level {creator.level} · {creator.sellerTier}
+            <Award size={14} aria-hidden /> Level {level} · {sellerTierForLevel(level)}
           </span>
-          {creator.badges.map((badge) => {
+          {badges.map((badge) => {
             const Icon = BADGE_ICONS[badge.id];
             return (
               <span
@@ -144,16 +155,14 @@ export function CreatorProfileClient({
         </div>
 
         <div className="mt-5 max-w-sm">
-          <XPBar xp={creator.xp} xpToNextLevel={creator.xpToNextLevel} />
+          <XPBar xp={xp} xpToNextLevel={xpThresholdForLevel(level)} />
         </div>
 
-        <div className="mt-6 grid grid-cols-3 gap-3 rounded-2xl border border-border bg-surface p-4 shadow-card sm:grid-cols-6">
+        <div className="mt-6 grid grid-cols-2 gap-3 rounded-2xl border border-border bg-surface p-4 shadow-card sm:grid-cols-4">
           <Stat label="Products" value={String(products.length)} />
           <Stat label="Sales" value={formatCompactNumber(totalSales)} />
           <Stat label="Rating" value={avgRating > 0 ? avgRating.toFixed(1) : "—"} />
-          <Stat label="Followers" value={formatCompactNumber(creator.followers)} />
-          <Stat label="Positive" value={`${creator.positiveReviewPct}%`} />
-          <Stat label="Joined" value={creator.joined} />
+          <Stat label="Joined" value={creator.joined || "—"} />
         </div>
 
         <Tabs tabs={TABS} activeId={tab} onChange={setTab} className="mt-8 border-b border-border pb-4" />
@@ -200,16 +209,10 @@ export function CreatorProfileClient({
             )
           ) : (
             <div className="max-w-2xl space-y-4 text-ink-soft">
-              <p>{creator.bio}</p>
-              <div className="grid grid-cols-2 gap-4 rounded-2xl border border-border bg-surface p-4 text-sm">
-                <div>
-                  <p className="font-semibold text-ink">Response time</p>
-                  <p>{creator.responseTime}</p>
-                </div>
-                <div>
-                  <p className="font-semibold text-ink">Member since</p>
-                  <p>{creator.joined}</p>
-                </div>
+              <p>{creator.bio || `${creator.name} has not added a bio yet.`}</p>
+              <div className="rounded-2xl border border-border bg-surface p-4 text-sm">
+                <p className="font-semibold text-ink">Member since</p>
+                <p>{creator.joined || "—"}</p>
               </div>
             </div>
           )}

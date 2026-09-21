@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ChevronRight,
-  BadgeCheck,
   Heart,
   ShoppingBag,
   CheckCircle2,
@@ -14,12 +13,12 @@ import {
   Zap,
   Lock,
   Undo2,
-  MessageCircle,
   Download,
   Loader2,
 } from "lucide-react";
 import type { Creator, Product } from "@/lib/types";
 import { useAppState } from "@/lib/state/AppStateContext";
+import { sellerTierForLevel } from "@/lib/creators";
 import { requestDownloadUrl } from "@/lib/supabase/download";
 import { cn, discountPercent, formatCompactNumber, formatPrice, isReleased, ratingBreakdown } from "@/lib/utils";
 import { getCategory } from "@/lib/data/categories";
@@ -251,7 +250,6 @@ export function ProductDetailClient({
           <Link href={`/@${creator.handle}`} className="flex items-center gap-2 text-sm">
             <CreatorAvatar name={creator.name} seed={creator.avatarSeed} avatarUrl={creator.avatar} size={24} />
             <span className="font-semibold text-ink hover:text-ink/80">By {creator.name}</span>
-            {creator.verified && <BadgeCheck size={16} className="text-blue-500" aria-hidden />}
           </Link>
 
           <div className="flex flex-wrap items-center gap-3 text-sm text-ink-soft">
@@ -510,24 +508,15 @@ export function ProductDetailClient({
               <div>
                 <p className="flex items-center gap-1 font-display font-bold text-ink">
                   {creator.name}
-                  {creator.verified && <BadgeCheck size={16} className="text-blue-500" aria-hidden />}
                 </p>
-                <p className="text-xs text-ink-soft">{creator.sellerTier}</p>
+                <p className="text-xs text-ink-soft">{sellerTierForLevel(creator.level)}</p>
               </div>
             </Link>
 
-            <div className="mt-4 grid grid-cols-3 gap-2 border-y border-border py-3 text-center">
+            <div className="mt-4 grid grid-cols-1 gap-2 border-y border-border py-3 text-center">
               <div>
                 <p className="font-display font-bold text-ink">{formatCompactNumber(product.sold)}</p>
                 <p className="text-[11px] text-ink-soft">Sales</p>
-              </div>
-              <div>
-                <p className="font-display font-bold text-ink">{formatCompactNumber(creator.followers)}</p>
-                <p className="text-[11px] text-ink-soft">Followers</p>
-              </div>
-              <div>
-                <p className="font-display font-bold text-ink">{creator.positiveReviewPct}%</p>
-                <p className="text-[11px] text-ink-soft">Positive</p>
               </div>
             </div>
 
@@ -545,9 +534,6 @@ export function ProductDetailClient({
                 {following ? "Following" : "Follow"}
               </Button>
             </div>
-            <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-xs text-ink-soft">
-              <MessageCircle size={14} aria-hidden /> Typically responds in {creator.responseTime}
-            </p>
           </div>
 
           <div className="rounded-3xl border border-border bg-surface p-5 shadow-card">

@@ -1,5 +1,4 @@
 import type { MetadataRoute } from "next";
-import { products } from "@/lib/data/products";
 import { categories } from "@/lib/data/categories";
 import { getAllPostSlugs } from "@/lib/blog";
 
@@ -8,9 +7,8 @@ const BASE_URL = "https://lootza.vercel.app";
 /**
  * Static/known-at-build-time URLs only — real (Supabase) listings aren't
  * enumerable here without a live fetch at build time, which would make every
- * deploy depend on Supabase being reachable. The seed catalog, categories,
- * and blog posts alone still give search engines a real crawl path into the
- * site's structure.
+ * deploy depend on Supabase being reachable. Categories and blog posts alone
+ * still give search engines a real crawl path into the site's structure.
  */
 export default function sitemap(): MetadataRoute.Sitemap {
   const staticPages: MetadataRoute.Sitemap = [
@@ -30,17 +28,11 @@ export default function sitemap(): MetadataRoute.Sitemap {
     priority: 0.6,
   }));
 
-  const productPages: MetadataRoute.Sitemap = products.map((p) => ({
-    url: `${BASE_URL}/product/${p.slug}`,
-    changeFrequency: "weekly",
-    priority: 0.5,
-  }));
-
   const blogPages: MetadataRoute.Sitemap = getAllPostSlugs().map((slug) => ({
     url: `${BASE_URL}/blog/${slug}`,
     changeFrequency: "monthly",
     priority: 0.6,
   }));
 
-  return [...staticPages, ...categoryPages, ...productPages, ...blogPages];
+  return [...staticPages, ...categoryPages, ...blogPages];
 }

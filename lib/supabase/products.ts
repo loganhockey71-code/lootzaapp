@@ -1,15 +1,6 @@
 import { supabase } from "@/lib/supabase";
-import { formatFileSize } from "@/lib/utils";
+import { formatFileSize, toRelativeTime } from "@/lib/utils";
 import type { CategorySlug, Product } from "@/lib/types";
-
-/**
- * Real listings are always displayed under the same demo seller identity the
- * rest of Lootza already uses for "the current user" (see CURRENT_USER_ID in
- * AppStateContext) — the mock Creator/follow system this points at is out of
- * scope for this migration. The REAL owner is still `sellerId` (a genuine
- * Supabase auth id), which is what RLS and ownership checks actually use.
- */
-const DISPLAY_CREATOR_ID = "pixelmax";
 
 export interface ProductRow {
   id: string;
@@ -41,19 +32,6 @@ export interface ProductRow {
   updated_at: string;
 }
 
-/** "Just now" / "5m ago" / "3d ago", matching the style seed products already use. */
-function toRelativeTime(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const minutes = Math.floor(diffMs / 60_000);
-  if (minutes < 1) return "Just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return `${Math.floor(days / 7)}w ago`;
-}
-
 export function mapProductRow(row: ProductRow): Product {
   return {
     id: row.id,
@@ -62,7 +40,7 @@ export function mapProductRow(row: ProductRow): Product {
     tagline: row.tagline,
     description: row.description.split("\n").map((p) => p.trim()).filter(Boolean),
     category: row.category as CategorySlug,
-    creatorId: DISPLAY_CREATOR_ID,
+    creatorId: row.seller_id,
     sellerId: row.seller_id,
     price: Number(row.price),
     originalPrice: row.original_price != null ? Number(row.original_price) : undefined,
@@ -122,7 +100,6 @@ export async function fetchProductBySlug(slug: string): Promise<Product | null> 
 
 export interface NewProductInput {
   id: string;
-  sellerId: string;
   title: string;
   tagline: string;
   description: string[];
@@ -143,11 +120,17 @@ export interface NewProductInput {
 }
 
 export async function insertProduct(input: NewProductInput): Promise<Product> {
+  // The owner is always the verified, currently signed-in user — never a value
+  // passed in by the caller. RLS additionally rejects any row whose seller_id
+  // isn't auth.uid(), so a forged owner can't get through either way.
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError || !authData.user) throw new Error("You must be logged in to create a listing.");
+
   const { data, error } = await supabase
     .from("products")
     .insert({
       id: input.id,
-      seller_id: input.sellerId,
+      seller_id: authData.user.id,
       title: input.title,
       tagline: input.tagline,
       description: input.description.join("\n"),

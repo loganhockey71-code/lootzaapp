@@ -3,16 +3,16 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Trophy, Flame, Gift, Coins, Award, ArrowUp } from "lucide-react";
+import { Trophy, Gift, Coins, Award, ArrowUp } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Tabs } from "@/components/ui/Tabs";
 import { Button } from "@/components/ui/Button";
 import { CreatorAvatar } from "@/components/creator/CreatorAvatar";
-import { creators } from "@/lib/data/creators";
 import { useAppState } from "@/lib/state/AppStateContext";
 import { useAllProducts } from "@/lib/hooks/useAllProducts";
 import {
   LEADERBOARD_PERIODS,
+  MIN_PARTICIPANTS_FOR_REWARDS,
   WEEKLY_REWARD_TIERS,
   currentUserPeriodXp,
   getCreatorsLeaderboard,
@@ -25,8 +25,6 @@ import {
   type LeaderboardResult,
 } from "@/lib/leaderboard";
 import { cn } from "@/lib/utils";
-
-const CURRENT_USER = creators.find((c) => c.id === "pixelmax")!;
 
 const CATEGORY_TABS: { id: LeaderboardCategory; label: string }[] = [
   { id: "creators", label: "Creators" },
@@ -70,17 +68,12 @@ function EntryRow({ entry, category }: { entry: LeaderboardEntry; category: Lead
       )}
     >
       <RankBadge rank={entry.rank} />
-      <CreatorAvatar name={entry.name} seed={entry.avatarSeed} size={32} />
+      <CreatorAvatar name={entry.name} seed={entry.avatarSeed} avatarUrl={entry.avatarUrl} size={32} />
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-ink">
           {entry.name}
           {entry.isCurrentUser && (
             <span className="rounded-full bg-primary-600 px-1.5 py-0.5 text-[10px] font-bold text-white">You</span>
-          )}
-          {entry.topTenStreak >= 2 && (
-            <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-accent-600">
-              <Flame size={11} aria-hidden /> {entry.topTenStreak}w
-            </span>
           )}
         </p>
         <p className="truncate text-xs text-ink-soft">{entry.meta}</p>
@@ -101,7 +94,8 @@ export function LeaderboardContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   // Note: promotion/ad data is intentionally never read here. Buying ads must not affect rank.
-  const { xp, xpTxns, level, claimedWeeklyLeaderboardReward, claimWeeklyLeaderboardReward } = useAppState();
+  const { xp, xpTxns, level, claimedWeeklyLeaderboardReward, claimWeeklyLeaderboardReward, user, profile, getCreator } =
+    useAppState();
   const allProducts = useAllProducts();
 
   const [category, setCategory] = useState<LeaderboardCategory>(
@@ -122,28 +116,45 @@ export function LeaderboardContent() {
     router.replace(`/leaderboard?category=${category}&period=${id}`, { scroll: false });
   }
 
-  const currentUserBase = { id: CURRENT_USER.id, name: CURRENT_USER.name, avatarSeed: CURRENT_USER.avatarSeed, handle: CURRENT_USER.handle, level };
+  // Always the signed-in account's own identity, never a fixed demo user.
+  const userId = user?.id ?? null;
+  const handle = profile?.username ?? user?.username ?? "";
+  const displayName = profile?.displayName?.trim() || handle;
+  const avatarUrl = profile?.avatarUrl ?? null;
 
   const board: LeaderboardResult = useMemo(() => {
-    if (category === "creators") return getCreatorsLeaderboard(period, allProducts);
-    if (category === "products") return getProductsLeaderboard(period, allProducts, CURRENT_USER.id);
+    if (category === "creators") return getCreatorsLeaderboard(allProducts, getCreator, userId);
+    if (category === "products") return getProductsLeaderboard(allProducts, userId);
     const periodXp = currentUserPeriodXp(xpTxns, xp, period);
-    return getCollectorsLeaderboard(period, periodXp, currentUserBase);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, period, allProducts, xpTxns, xp, level]);
+    return getCollectorsLeaderboard(periodXp, {
+      id: userId ?? "guest",
+      name: displayName,
+      avatarSeed: userId ?? "guest",
+      avatarUrl,
+      handle,
+      level,
+    });
+  }, [category, period, allProducts, getCreator, userId, xpTxns, xp, level, displayName, avatarUrl, handle]);
 
   // Reward eligibility is always based on the WEEKLY board for creators/collectors,
   // regardless of which period tab is currently being viewed.
   const weeklyRewardBoard: LeaderboardResult | null = useMemo(() => {
     if (category === "products") return null;
-    if (category === "creators") return getCreatorsLeaderboard("weekly", allProducts);
+    if (category === "creators") return getCreatorsLeaderboard(allProducts, getCreator, userId);
     const weeklyXp = currentUserPeriodXp(xpTxns, xp, "weekly");
-    return getCollectorsLeaderboard("weekly", weeklyXp, currentUserBase);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, allProducts, xpTxns, xp, level]);
+    return getCollectorsLeaderboard(weeklyXp, {
+      id: userId ?? "guest",
+      name: displayName,
+      avatarSeed: userId ?? "guest",
+      avatarUrl,
+      handle,
+      level,
+    });
+  }, [category, allProducts, getCreator, userId, xpTxns, xp, level, displayName, avatarUrl, handle]);
 
   const myWeeklyRank = weeklyRewardBoard?.currentUserEntry?.rank ?? null;
-  const myReward = myWeeklyRank ? rewardForRank(myWeeklyRank) : null;
+  const rewardsUnlocked = (weeklyRewardBoard?.totalParticipants ?? 0) >= MIN_PARTICIPANTS_FOR_REWARDS;
+  const myReward = myWeeklyRank && rewardsUnlocked ? rewardForRank(myWeeklyRank) : null;
 
   function handleClaim() {
     if (!myReward) return;
@@ -169,6 +180,11 @@ export function LeaderboardContent() {
         onChange={updatePeriod}
         className="mb-6"
       />
+      {category !== "collectors" && (
+        <p className="-mt-3 mb-6 text-xs text-ink-soft">
+          Creator and product rankings use lifetime sales, so they look the same for every period.
+        </p>
+      )}
 
       <div className="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-card">
         <div className="mb-3 flex items-center gap-1.5 text-sm font-bold text-ink">
@@ -182,6 +198,12 @@ export function LeaderboardContent() {
             </div>
           ))}
         </div>
+
+        {weeklyRewardBoard && !rewardsUnlocked && (
+          <p className="mt-3 text-xs text-ink-soft">
+            Rewards unlock once at least {MIN_PARTICIPANTS_FOR_REWARDS} people are ranked.
+          </p>
+        )}
 
         {myReward && (
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-accent-50 px-3 py-2.5">
@@ -224,7 +246,7 @@ export function LeaderboardContent() {
                     : "."}
               </p>
               <p className="text-xs text-ink-soft">
-                Out of {board.totalParticipants.toLocaleString()} ranked this {period === "all-time" ? "period" : period}.
+                Out of {board.totalParticipants.toLocaleString()} ranked{category === "collectors" ? ` this ${period === "all-time" ? "period" : period}` : ""}.
               </p>
             </div>
           </div>
